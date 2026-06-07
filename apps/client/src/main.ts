@@ -8,7 +8,10 @@ import { GameScene } from './game/scenes/GameScene.js';
 import { ResultsScene } from './game/scenes/ResultsScene.js';
 
 const config: Phaser.Types.Core.GameConfig = {
-  type: Phaser.AUTO,
+  // CANVAS (2D) rather than AUTO/WebGL: more universally compatible on mobile
+  // GPUs/browsers, where WebGL can fail and leave the canvas blank. This game is
+  // light enough that the Canvas renderer performs fine.
+  type: Phaser.CANVAS,
   parent: 'game-container',
   width: 1280,
   height: 720,
