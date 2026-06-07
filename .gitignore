@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.claude/settings.local.json
+coverage/
+.nyc_output/
+*.tsbuildinfo
+apps/client/dist/
+apps/server/dist/
+packages/shared/dist/

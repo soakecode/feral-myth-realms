@@ -1,0 +1,38 @@
+# Render Blueprint — deploys the Feral Myth: Realms game server.
+#
+# Usage:
+#   1. Push this repo to GitHub.
+#   2. On render.com → "New +" → "Blueprint" → select your repo.
+#   3. Render reads this file and creates the service.
+#   4. Fill in the secret env vars (marked sync: false) in the dashboard.
+#
+# NOTE: This deploys ONLY the authoritative game server (Colyseus). The client
+# (static PWA) is deployed separately to a CDN — see docs/DEPLOYMENT.md.
+# Cloudflare Workers/Pages CANNOT host this server: Colyseus needs a long-lived
+# Node process holding in-memory room state + persistent WebSocket connections.
+
+services:
+  - type: web
+    name: fmr-server
+    runtime: node
+    plan: free # upgrade to "starter" ($7/mo) to avoid cold starts after 15 min idle
+    region: oregon # pick the region closest to your players / Supabase project
+    # Build from the monorepo root so npm workspaces resolves @fmr/shared,
+    # which esbuild then inlines into the server bundle.
+    rootDir: .
+    buildCommand: npm install && npm run build:server
+    startCommand: npm start --workspace=apps/server
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # PORT is injected by Render automatically — do not hardcode it.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY # server-only secret — never exposed to the client
+        sync: false
+      - key: CLIENT_ORIGIN # e.g. https://feral-myth-realms.pages.dev
+        sync: false

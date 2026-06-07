@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head><title>Icon Generator</title></head>
+<body>
+<canvas id="c192" width="192" height="192"></canvas>
+<canvas id="c512" width="512" height="512"></canvas>
+<script>
+function drawIcon(canvas, size) {
+  const ctx = canvas.getContext('2d');
+  const half = size / 2;
+
+  // Background
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, size, size);
+
+  // Outer circle
+  ctx.strokeStyle = '#ffd700';
+  ctx.lineWidth = size * 0.03;
+  ctx.beginPath();
+  ctx.arc(half, half, half * 0.88, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Rune star
+  ctx.strokeStyle = '#ffd700';
+  ctx.lineWidth = size * 0.02;
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(half, half);
+    ctx.lineTo(half + Math.cos(a) * half * 0.7, half + Math.sin(a) * half * 0.7);
+    ctx.stroke();
+  }
+
+  // Center gem
+  ctx.fillStyle = '#ffd700';
+  ctx.beginPath();
+  ctx.arc(half, half, half * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Paw mark
+  const pawR = half * 0.08;
+  const pawPositions = [{x:-0.22,y:0.3},{x:0,y:0.38},{x:0.22,y:0.3},{x:-0.32,y:0.12},{x:0.32,y:0.12}];
+  ctx.fillStyle = '#ff6f00';
+  pawPositions.forEach(p => {
+    ctx.beginPath();
+    ctx.arc(half + p.x * size, half + p.y * size, pawR, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Title text
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold ${size * 0.08}px Arial`;
+  ctx.textAlign = 'center';
+  ctx.fillText('FMR', half, half * 0.3);
+}
+
+drawIcon(document.getElementById('c192'), 192);
+drawIcon(document.getElementById('c512'), 512);
+
+// Download links
+['192','512'].forEach(s => {
+  const canvas = document.getElementById(`c${s}`);
+  const link = document.createElement('a');
+  link.download = `icon-${s}.png`;
+  link.href = canvas.toDataURL();
+  link.textContent = `Download icon-${s}.png`;
+  link.style.display = 'block';
+  document.body.appendChild(link);
+});
+</script>
+</body>
+</html>
