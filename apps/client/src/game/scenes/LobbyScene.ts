@@ -51,7 +51,7 @@ export class LobbyScene extends Phaser.Scene {
         .lobby-card {
           background:linear-gradient(145deg,#1a1a3e,#0d0d2e);
           border:1px solid rgba(255,215,0,0.2); border-radius:14px;
-          padding:32px 36px; width:420px; max-height:90vh; overflow-y:auto;
+          padding:28px clamp(18px,5vw,36px); width:min(420px, 92vw); max-height:90vh; overflow-y:auto;
           box-shadow:0 8px 40px rgba(0,0,0,0.5);
         }
         .lobby-card h2 { color:#ffd700; font-size:20px; margin-bottom:4px; }

@@ -50,8 +50,8 @@ export class AuthScene extends Phaser.Scene {
         .auth-card {
           background:linear-gradient(145deg,#1a1a3e,#0d0d2e);
           border:1px solid rgba(255,215,0,0.2);
-          border-radius:14px; padding:36px 40px;
-          width:340px; color:#fff;
+          border-radius:14px; padding:36px clamp(20px,6vw,40px);
+          width:min(340px, 92vw); color:#fff;
           box-shadow:0 8px 40px rgba(0,0,0,0.5);
         }
         .auth-card h2 { color:#ffd700; font-size:20px; margin-bottom:6px; }

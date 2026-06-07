@@ -47,7 +47,7 @@ export class ResultsScene extends Phaser.Scene {
         .results-card {
           background:linear-gradient(145deg,#1a1a4a,#0d0d2e);
           border:1px solid rgba(255,215,0,0.3); border-radius:16px;
-          padding:40px 48px; text-align:center; min-width:360px;
+          padding:40px clamp(20px,6vw,48px); text-align:center; min-width:0; width:min(360px, 92vw);
           box-shadow:0 12px 60px rgba(0,0,0,0.6);
         }
         .result-title {

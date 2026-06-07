@@ -11,7 +11,7 @@ import {
 import { MSG } from '@fmr/shared';
 import { CLASS_DEFINITIONS } from '@fmr/shared';
 import { clamp } from '@fmr/shared';
-import type { PlayerClass } from '@fmr/shared';
+import type { PlayerClass, AbilityKey } from '@fmr/shared';
 import type { PlayerSession } from '../../auth/sessionStore.js';
 
 interface PlayerSprite {
@@ -86,9 +86,133 @@ export class GameScene extends Phaser.Scene {
     this.inputSystem = new InputSystem(this);
     this.setupRoomListeners();
     this.buildHUD();
+    this.setupTouchControls();
 
     // Depth sort each frame
     this.events.on('postupdate', () => this.sortDepths());
+  }
+
+  private setupTouchControls() {
+    // Auto-aim for touch abilities: nearest alive target (enemy or, in duels, foe).
+    this.inputSystem.setAutoAimProvider(() => {
+      const state = this.room.state as RealmRoomState;
+      const me = state.players.get(this.localPlayerId);
+      if (!me) return { x: 0, y: 0 };
+      let bestX = 0;
+      let bestY = 0;
+      let bestD = Infinity;
+      const consider = (x: number, y: number) => {
+        const d = (x - me.x) ** 2 + (y - me.y) ** 2;
+        if (d < bestD) { bestD = d; bestX = x; bestY = y; }
+      };
+      state.enemies?.forEach((en) => { if (en.isAlive) consider(en.x, en.y); });
+      state.players?.forEach((p, id) => { if (id !== this.localPlayerId && p.isAlive) consider(p.x, p.y); });
+      if (bestD < Infinity) return { x: bestX, y: bestY };
+      // Fallback: aim a bit ahead in the facing direction
+      const dirs: Record<string, [number, number]> = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
+      const v = dirs[me.direction] ?? [1, 0];
+      return { x: me.x + v[0] * 140, y: me.y + v[1] * 140 };
+    });
+
+    const isTouch =
+      typeof window !== 'undefined' &&
+      (window.matchMedia?.('(pointer: coarse)').matches ||
+        navigator.maxTouchPoints > 0 ||
+        'ontouchstart' in window);
+    if (!isTouch) return;
+
+    const overlay = document.getElementById('ui-overlay');
+    if (!overlay) return;
+
+    const wrap = document.createElement('div');
+    wrap.id = 'touch-controls';
+    wrap.innerHTML = `
+      <style>
+        /* On touch devices, lift the HP/EN panel to the top and hide the
+           keyboard ability row (replaced by the big touch buttons). */
+        #game-hud { top:10px; bottom:auto; left:10px; min-width:0; padding:8px 12px; }
+        #game-hud .hud-abilities, #game-hud .hud-level { display:none; }
+        #chat-container { bottom:auto !important; top:84px !important; }
+        #touch-joystick {
+          position:absolute; bottom:26px; left:26px;
+          width:128px; height:128px; border-radius:50%;
+          background:rgba(255,255,255,0.06); border:2px solid rgba(255,255,255,0.18);
+          touch-action:none; pointer-events:auto;
+        }
+        #touch-thumb {
+          position:absolute; left:39px; top:39px; width:50px; height:50px;
+          border-radius:50%; background:rgba(255,255,255,0.28);
+          border:1px solid rgba(255,255,255,0.45); will-change:transform;
+        }
+        #touch-abilities {
+          position:absolute; bottom:26px; right:22px;
+          display:flex; align-items:flex-end; gap:14px; pointer-events:none;
+        }
+        .touch-ab {
+          pointer-events:auto; width:60px; height:60px; border-radius:50%;
+          border:2px solid rgba(255,255,255,0.35); background:rgba(0,0,0,0.45);
+          color:#fff; font-size:19px; font-weight:bold; touch-action:none;
+          transition:transform 0.08s; -webkit-tap-highlight-color:transparent;
+          display:flex; align-items:center; justify-content:center;
+        }
+        .touch-ab-basic { width:74px; height:74px; background:rgba(170,40,40,0.55); font-size:26px; }
+        .touch-ab:active { transform:scale(0.9); }
+      </style>
+      <div id="touch-joystick"><div id="touch-thumb"></div></div>
+      <div id="touch-abilities">
+        <button class="touch-ab" data-ab="q">Q</button>
+        <button class="touch-ab" data-ab="e">E</button>
+        <button class="touch-ab" data-ab="r">R</button>
+        <button class="touch-ab touch-ab-basic" data-ab="basic">⚔</button>
+      </div>
+    `;
+    overlay.appendChild(wrap);
+
+    // Joystick (pointer events handle both touch and mouse)
+    const base = document.getElementById('touch-joystick')!;
+    const thumb = document.getElementById('touch-thumb')!;
+    let activeId: number | null = null;
+    const setThumb = (nx: number, ny: number) => {
+      thumb.style.transform = `translate(${nx * 38}px, ${ny * 38}px)`;
+    };
+    const handleMove = (e: PointerEvent) => {
+      const rect = base.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      let dx = (e.clientX - cx) / (rect.width / 2);
+      let dy = (e.clientY - cy) / (rect.height / 2);
+      const len = Math.hypot(dx, dy);
+      if (len > 1) { dx /= len; dy /= len; }
+      this.inputSystem.setTouchMove(dx, dy);
+      setThumb(dx, dy);
+    };
+    const endMove = (e: PointerEvent) => {
+      if (e.pointerId !== activeId) return;
+      activeId = null;
+      this.inputSystem.setTouchMove(0, 0);
+      setThumb(0, 0);
+    };
+    base.addEventListener('pointerdown', (e) => {
+      activeId = e.pointerId;
+      try { base.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      handleMove(e);
+      e.preventDefault();
+    });
+    base.addEventListener('pointermove', (e) => {
+      if (e.pointerId === activeId) { handleMove(e); e.preventDefault(); }
+    });
+    base.addEventListener('pointerup', endMove);
+    base.addEventListener('pointercancel', endMove);
+
+    // Ability buttons
+    wrap.querySelectorAll<HTMLElement>('.touch-ab').forEach((btn) => {
+      btn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const ab = btn.dataset.ab as AbilityKey;
+        this.inputSystem.queueAbility(ab);
+      });
+    });
   }
 
   private buildMap() {

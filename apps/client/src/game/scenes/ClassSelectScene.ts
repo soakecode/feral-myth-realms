@@ -74,7 +74,7 @@ export class ClassSelectScene extends Phaser.Scene {
         #class-select {
           position:absolute; top:0; left:0; width:100%; height:100%;
           display:flex; flex-direction:column;
-          align-items:center; justify-content:center;
+          align-items:center; justify-content:flex-start; overflow-y:auto;
           background:radial-gradient(ellipse at center,#1a2a3a 0%,#0d1a2e 60%,#080d1a 100%);
           font-family:'Segoe UI',system-ui,sans-serif;
           color:#fff; padding:20px; box-sizing:border-box;
@@ -87,8 +87,8 @@ export class ClassSelectScene extends Phaser.Scene {
         .class-card {
           background:linear-gradient(145deg,#1a1a3e,#111130);
           border:2px solid rgba(255,255,255,0.1);
-          border-radius:12px; padding:20px 16px;
-          width:190px; cursor:pointer;
+          border-radius:12px; padding:18px 14px;
+          width:min(190px, 44vw); cursor:pointer;
           transition:transform 0.15s,border-color 0.15s,box-shadow 0.15s;
           text-align:center;
         }

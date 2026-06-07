@@ -11,6 +11,12 @@ export class InputSystem {
   private aimX = 0;
   private aimY = 0;
 
+  // Touch state (mobile virtual controls)
+  private touchDx = 0;
+  private touchDy = 0;
+  private queuedAbility: AbilityKey | null = null;
+  private autoAimFn?: () => { x: number; y: number };
+
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
     this.cursors = scene.input.keyboard!.createCursorKeys();
@@ -34,16 +40,31 @@ export class InputSystem {
     });
 
     scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (pointer.leftButtonDown()) {
-        this.mouseDown = true;
-        this.aimX = pointer.worldX;
-        this.aimY = pointer.worldY;
-      }
+      // Tap on the game world = basic attack toward that point (works on touch too)
+      this.mouseDown = true;
+      this.aimX = pointer.worldX;
+      this.aimY = pointer.worldY;
     });
 
     scene.input.on('pointerup', () => {
       this.mouseDown = false;
     });
+  }
+
+  /** Provider used to compute aim for touch abilities (e.g. nearest enemy). */
+  setAutoAimProvider(fn: () => { x: number; y: number }) {
+    this.autoAimFn = fn;
+  }
+
+  /** Set movement vector from the virtual joystick (components in -1..1). */
+  setTouchMove(dx: number, dy: number) {
+    this.touchDx = dx;
+    this.touchDy = dy;
+  }
+
+  /** Queue an ability press from a touch button; consumed on next collect(). */
+  queueAbility(key: AbilityKey) {
+    this.queuedAbility = key;
   }
 
   collect(): PlayerInputPayload | null {
@@ -55,8 +76,19 @@ export class InputSystem {
     if (this.cursors.up.isDown || this.wasd.up.isDown) dy -= 1;
     if (this.cursors.down.isDown || this.wasd.down.isDown) dy += 1;
 
+    // Virtual joystick (mobile). Direction is what matters — the server
+    // normalizes to a constant speed, so fractional magnitudes are fine.
+    dx += this.touchDx;
+    dy += this.touchDy;
+
     let abilityKey: AbilityKey | null = null;
-    if (this.mouseDown || Phaser.Input.Keyboard.JustDown(this.keys.j)) {
+    let touchAbility = false;
+
+    if (this.queuedAbility) {
+      abilityKey = this.queuedAbility;
+      this.queuedAbility = null;
+      touchAbility = true;
+    } else if (this.mouseDown || Phaser.Input.Keyboard.JustDown(this.keys.j)) {
       abilityKey = 'basic';
     } else if (Phaser.Input.Keyboard.JustDown(this.keys.q)) {
       abilityKey = 'q';
@@ -68,13 +100,22 @@ export class InputSystem {
 
     if (dx === 0 && dy === 0 && abilityKey === null) return null;
 
+    let aimX = this.aimX;
+    let aimY = this.aimY;
+    // Touch-triggered abilities have no mouse cursor — aim via the provider.
+    if (touchAbility && this.autoAimFn) {
+      const aim = this.autoAimFn();
+      aimX = aim.x;
+      aimY = aim.y;
+    }
+
     return {
       seq: this.seq++,
       dx,
       dy,
       abilityKey,
-      aimX: this.aimX,
-      aimY: this.aimY,
+      aimX,
+      aimY,
       timestamp: Date.now(),
     };
   }
