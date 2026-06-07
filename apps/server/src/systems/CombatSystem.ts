@@ -1,7 +1,7 @@
 import { MapSchema } from '@colyseus/schema';
 import { PlayerSchema } from '../schema/PlayerSchema.js';
 import { EnemySchema } from '../schema/EnemySchema.js';
-import { CLASS_DEFINITIONS } from '@fmr/shared';
+import { CLASS_DEFINITIONS, WORLD } from '@fmr/shared';
 import { distance, clamp } from '@fmr/shared';
 import type { AbilityKey, PlayerClass } from '@fmr/shared';
 
@@ -119,8 +119,8 @@ export class CombatSystem {
       const dist = Math.sqrt(dx * dx + dy * dy);
       const blinkDist = Math.min(dist, abilityDef.range);
       if (dist > 0) {
-        player.x = clamp(player.x + (dx / dist) * blinkDist, 50, 1550);
-        player.y = clamp(player.y + (dy / dist) * blinkDist, 50, 1150);
+        player.x = clamp(player.x + (dx / dist) * blinkDist, 50, WORLD.width - 50);
+        player.y = clamp(player.y + (dy / dist) * blinkDist, 50, WORLD.height - 50);
       }
       return results;
     }
@@ -131,8 +131,8 @@ export class CombatSystem {
       const dy = aimY - player.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist > 0) {
-        player.x = clamp(player.x + (dx / dist) * abilityDef.range, 50, 1550);
-        player.y = clamp(player.y + (dy / dist) * abilityDef.range, 50, 1150);
+        player.x = clamp(player.x + (dx / dist) * abilityDef.range, 50, WORLD.width - 50);
+        player.y = clamp(player.y + (dy / dist) * abilityDef.range, 50, WORLD.height - 50);
       }
       return results;
     }
@@ -144,8 +144,8 @@ export class CombatSystem {
       const dist = Math.sqrt(dx * dx + dy * dy);
       const leapDist = Math.min(dist, abilityDef.range);
       if (dist > 0) {
-        player.x = clamp(player.x + (dx / dist) * leapDist, 50, 1550);
-        player.y = clamp(player.y + (dy / dist) * leapDist, 50, 1150);
+        player.x = clamp(player.x + (dx / dist) * leapDist, 50, WORLD.width - 50);
+        player.y = clamp(player.y + (dy / dist) * leapDist, 50, WORLD.height - 50);
       }
     }
 

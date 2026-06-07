@@ -48,10 +48,8 @@ const config: Phaser.Types.Core.GameConfig = {
 const game = new Phaser.Game(config);
 
 // PWA install prompt handling
-let deferredPrompt: Event | null = null;
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
-  deferredPrompt = e;
 });
 
 // Service worker registration handled by vite-plugin-pwa

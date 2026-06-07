@@ -1,95 +1,62 @@
-# Roadmap — Feral Myth: Realms
+# Roadmap - Feral Myth: Realms
 
-## V1.0 — Vertical Slice (Current)
+Este roadmap parte del vertical slice rescatado el 2026-06-07. Prioriza estabilidad local y multiplayer real antes de features.
 
-**Status**: In progress
+## P0 - Mantener el slice jugable
 
-- [x] Monorepo with npm workspaces
-- [x] Phaser 3 client with procedural art
-- [x] Colyseus server (RealmRoom + DuelRoom)
-- [x] Supabase auth (email/password)
-- [x] Guest mode
-- [x] 4 playable classes with abilities
-- [x] 3 PvE enemy types with server-side AI
-- [x] 3 capturable sanctuaries
-- [x] Real-time multiplayer (2–6 players)
-- [x] 1v1 duel mode
-- [x] XP / level progression
-- [x] Death & respawn
-- [x] In-game chat
-- [x] ES/EN i18n
-- [x] PWA (installable)
-- [x] Deployment docs
+- [ ] Crear tests automatizados de `RealmRoom`.
+- [ ] Test de join/leave con dos clientes Colyseus.
+- [ ] Test de input y movimiento server-side.
+- [ ] Test de ataque a enemigo y respawn.
+- [ ] Script de smoke test multiplayer reusable.
+- [ ] Verificacion browser real con dos pestanas y capturas.
 
----
+## P1 - Clarificar renderer cliente
 
-## V1.1 — Polish
+- [ ] Decidir si el gameplay oficial sera Phaser o Three.js.
+- [ ] Si se mantiene Three.js, documentarlo como parte del stack.
+- [ ] Si se migra a Phaser, eliminar `Game3D` gradualmente.
+- [ ] Evitar mantener dos renderers completos sin necesidad.
 
-- [ ] Sprite animations (spritesheets instead of geometric shapes)
-- [ ] Sound effects (Web Audio API — oscillators or free SFX)
-- [ ] Background music (procedural or CC0)
-- [ ] Ability visual effects improved (particle systems)
-- [ ] Mobile touch controls (virtual joystick + buttons)
-- [ ] Ping display in HUD
-- [ ] Player list in lobby (show who's in room)
-- [ ] Room list with live player count
-- [ ] Bug fixes from playtesting
+## P2 - Calidad tecnica
 
----
+- [ ] Limpiar mojibake restante en UI y logs propios.
+- [ ] Reducir bundle cliente con code splitting.
+- [ ] Separar escenas auth/lobby/game en chunks.
+- [ ] Anadir manejo explicito de errores de conexion en lobby.
+- [ ] Mostrar room code de forma consistente en UI.
+- [ ] Confirmar que `onLeave` distingue salida voluntaria y desconexion.
 
-## V1.2 — Social Features
+## P3 - Supabase preparado, no bloqueante
 
-- [ ] Full friend system (add/remove friends via friend code)
-- [ ] Persistent friend list in Supabase
-- [ ] Private rooms with friend invite by code
-- [ ] Player profile page (stats, character, level)
-- [ ] Leaderboard (top players by XP or wins)
-- [ ] Match history viewer
+- [ ] Probar registro/login con proyecto Supabase de staging.
+- [ ] Verificar migraciones desde cero.
+- [ ] Verificar RLS.
+- [ ] Verificar persistencia de stats solo para usuarios registrados.
+- [ ] Confirmar que guest mode sigue funcionando sin variables.
 
----
+## P4 - Gameplay minimo mejorado
 
-## V1.3 — Inventory & Progression
+- [ ] Validar ataque por arco o direccion, no solo distancia.
+- [ ] Agregar barras de vida visibles para enemigos en renderer actual.
+- [ ] Agregar feedback de cooldown mas claro.
+- [ ] Revisar IA de enemigos y rango de aggro.
+- [ ] Balancear spawn para que el primer enemigo sea facil de encontrar.
 
-- [ ] Items system (equippable gear)
-- [ ] Gold economy (earn gold in matches)
-- [ ] Shop in lobby
-- [ ] Consumable items (potions)
-- [ ] Character stat growth on level-up
-- [ ] Skill tree or talent unlock at levels 5/10/15
+## P5 - PWA y despliegue
 
----
+- [ ] Probar instalacion PWA en Chrome real.
+- [ ] Revisar cache de service worker en deploy.
+- [ ] Documentar hosting cliente/servidor separados.
+- [ ] Revisar variables de entorno de produccion.
 
-## V1.4 — Cosmetics (Ethical Monetization)
+## Fuera de alcance hasta estabilizar
 
-- [ ] Color palette variants per class (unlockable)
-- [ ] Emote pack (bought or earned)
-- [ ] Profile borders and banners
-- [ ] No pay-to-win mechanics
-- [ ] All gameplay content free
-
----
-
-## V2.0 — World Expansion
-
-- [ ] Multiple maps (Beach, Ruins, Volcano)
-- [ ] 2 new classes (Bird Shaman, Serpent Rogue)
-- [ ] Guild system
-- [ ] Seasonal events
-- [ ] Spectator mode
-- [ ] Tournament bracket support
-- [ ] Self-hosted server option
-- [ ] Ranked matchmaking
-
----
-
-## Technical Debt / Improvements
-
-- [ ] Client-side prediction with server reconciliation
-- [ ] Proper spritesheet-based animations
-- [ ] Pathfinding for enemies (A* or navmesh)
-- [ ] Map editor
-- [ ] Unit tests for RealmRoom and DuelRoom
-- [ ] E2E tests (Playwright)
-- [ ] CI/CD pipeline (GitHub Actions)
-- [ ] Docker compose for local Supabase
-- [ ] OpenTelemetry traces for server performance
+- Inventario.
+- Monetizacion.
+- Login social.
+- Rankings complejos.
+- Mapas grandes.
+- Cinematicas.
+- Sistema completo de amigos.
+- Nuevas clases.

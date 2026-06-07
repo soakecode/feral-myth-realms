@@ -4,12 +4,22 @@ import { PlayerSchema } from '../schema/PlayerSchema.js';
 import { EnemyAI } from '../systems/EnemyAI.js';
 import { CombatSystem } from '../systems/CombatSystem.js';
 import { initSanctuaries, tickSanctuaries } from '../systems/SanctuarySystem.js';
+import { WorldSystem } from '../systems/WorldSystem.js';
 import { validateSupabaseToken } from '../auth/validateToken.js';
 import { persistMatchResult, incrementPlayerStats, updateCharacterXp } from '../db/supabase.js';
-import { CLASS_DEFINITIONS, CHAT_MAX_LENGTH, ALIAS_MAX_LENGTH, TICK_MS, ENERGY_REGEN_PER_TICK } from '@fmr/shared';
-import { sanitizeAlias, clamp, generateRoomCode } from '@fmr/shared';
+import {
+  CLASS_DEFINITIONS, CHAT_MAX_LENGTH, ALIAS_MAX_LENGTH, TICK_MS, ENERGY_REGEN_PER_TICK,
+  WORLD, XP_PER_ENEMY_KILL, HARVEST_COOLDOWN_MS,
+} from '@fmr/shared';
+import { sanitizeAlias, clamp, generateRoomCode, isBlocked, slowFactorAt, levelFromXp } from '@fmr/shared';
 import { MSG } from '@fmr/shared';
-import type { PlayerClass, PlayerInputPayload } from '@fmr/shared';
+import type { AbilityKey, PlayerClass, PlayerInputPayload, StructureType } from '@fmr/shared';
+
+function sanctumSpawn(): { x: number; y: number } {
+  const a = Math.random() * Math.PI * 2;
+  const r = Math.random() * (WORLD.sanctum.r - 80);
+  return { x: WORLD.sanctum.x + Math.cos(a) * r, y: WORLD.sanctum.y + Math.sin(a) * r };
+}
 
 export interface RealmJoinOptions {
   alias?: string;
@@ -24,8 +34,10 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
   maxClients = 6;
   private enemyAI = new EnemyAI();
   private combat = new CombatSystem();
+  private world = new WorldSystem();
   private xpAccumulated: Map<string, number> = new Map();
   private playerUserIds: Map<string, string | null> = new Map();
+  private harvestCd: Map<string, number> = new Map();
   private startedAt = new Date();
   private roomCode = generateRoomCode();
   private inputQueue: Map<string, PlayerInputPayload[]> = new Map();
@@ -34,6 +46,7 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
     this.setState(new RealmRoomState());
     this.enemyAI.initEnemies(this.state.enemies);
     initSanctuaries(this.state.sanctuaries);
+    this.world.initResources(this.state.resources);
 
     this.setMetadata({
       mode: 'realm',
@@ -65,6 +78,31 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
       console.log(`[RealmRoom] ${client.sessionId} ready`);
     });
 
+    this.onMessage(MSG.HARVEST, (client, payload: { nodeId: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || !player.isAlive) return;
+      const last = this.harvestCd.get(client.sessionId) ?? 0;
+      if (Date.now() - last < HARVEST_COOLDOWN_MS) return;
+      const res = this.world.harvest(player, payload.nodeId, this.state.resources);
+      if (res) {
+        this.harvestCd.set(client.sessionId, Date.now());
+        this.awardXp(client.sessionId, res.xp);
+        client.send(MSG.RESOURCE_GAINED, { type: res.type, amount: res.amount });
+      }
+    });
+
+    this.onMessage(MSG.BUILD, (client, payload: { structureType: StructureType; x: number; y: number }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || !player.isAlive) return;
+      const result = this.world.build(player, payload.structureType, payload.x, payload.y, this.state.structures);
+      if ('error' in result) {
+        client.send(MSG.BUILD_DENIED, { reason: result.error });
+      } else {
+        this.awardXp(client.sessionId, result.xp);
+        this.broadcast(MSG.STRUCTURE_BUILT, { type: result.type, x: payload.x, y: payload.y, ownerId: client.sessionId, ownerAlias: player.alias });
+      }
+    });
+
     console.log(`[RealmRoom] ${this.roomId} created, code: ${this.roomCode}`);
   }
 
@@ -93,8 +131,9 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
     player.guestId = options.guestId ?? '';
     player.alias = alias;
     player.classKey = classKey;
-    player.x = 400 + Math.random() * 800;
-    player.y = 400 + Math.random() * 400;
+    const spawn = sanctumSpawn();
+    player.x = spawn.x;
+    player.y = spawn.y;
     player.hp = classDef.stats.maxHp;
     player.maxHp = classDef.stats.maxHp;
     player.energy = classDef.stats.maxEnergy;
@@ -143,7 +182,7 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
       let totalDy = 0;
       let latestAimX = player.x;
       let latestAimY = player.y;
-      let abilityToUse: string | null = null;
+      let abilityToUse: AbilityKey | null = null;
 
       for (const input of queue) {
         totalDx += input.dx;
@@ -154,15 +193,17 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
       }
       this.inputQueue.set(sessionId, []);
 
-      // Normalize movement
+      // Normalize movement + obstacle collision (axis-separated so you slide).
       const len = Math.sqrt(totalDx * totalDx + totalDy * totalDy);
       if (len > 0) {
         const nx = totalDx / len;
         const ny = totalDy / len;
-        const speed = player.moveSpeed;
         const dt = deltaMs / 1000;
-        player.x = clamp(player.x + nx * speed * dt, 50, 1550);
-        player.y = clamp(player.y + ny * speed * dt, 50, 1150);
+        const step = player.moveSpeed * slowFactorAt(player.x, player.y) * dt;
+        const tryX = clamp(player.x + nx * step, 24, WORLD.width - 24);
+        const tryY = clamp(player.y + ny * step, 24, WORLD.height - 24);
+        if (!isBlocked(tryX, player.y, 16)) player.x = tryX;
+        if (!isBlocked(player.x, tryY, 16)) player.y = tryY;
 
         player.direction = Math.abs(nx) > Math.abs(ny)
           ? (nx > 0 ? 'right' : 'left')
@@ -178,17 +219,19 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
         results.forEach((r) => {
           this.broadcast(MSG.DAMAGE_EVENT, { targetId: r.targetId, sourceId: sessionId, amount: r.amount, isPlayer: r.isPlayer });
           if (r.killed && !r.isPlayer) {
-            this.awardXp(sessionId, 10);
-            this.broadcast(MSG.ENEMY_DIED, { enemyId: r.targetId, killerId: sessionId });
+            const enemyType = this.state.enemies.get(r.targetId)?.type ?? 'wisp';
+            this.awardXp(sessionId, XP_PER_ENEMY_KILL[enemyType] ?? 10);
+            this.broadcast(MSG.ENEMY_DIED, { enemyId: r.targetId, killerId: sessionId, enemyType });
           }
         });
       } else if (abilityToUse) {
-        const results = this.combat.applyAbility(sessionId, abilityToUse as any, latestAimX, latestAimY, this.state.players, this.state.enemies, now);
+        const results = this.combat.applyAbility(sessionId, abilityToUse, latestAimX, latestAimY, this.state.players, this.state.enemies, now);
         results.forEach((r) => {
           this.broadcast(MSG.DAMAGE_EVENT, { targetId: r.targetId, sourceId: sessionId, amount: r.amount, isPlayer: r.isPlayer });
           if (r.killed && !r.isPlayer) {
-            this.awardXp(sessionId, 10);
-            this.broadcast(MSG.ENEMY_DIED, { enemyId: r.targetId, killerId: sessionId });
+            const enemyType = this.state.enemies.get(r.targetId)?.type ?? 'wisp';
+            this.awardXp(sessionId, XP_PER_ENEMY_KILL[enemyType] ?? 10);
+            this.broadcast(MSG.ENEMY_DIED, { enemyId: r.targetId, killerId: sessionId, enemyType });
           }
         });
       }
@@ -215,14 +258,19 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
 
     // Sanctuary tick
     tickSanctuaries(this.state.sanctuaries, this.state.players, deltaMs);
+
+    // World tick: resource respawns + structure effects (campfire heal)
+    this.world.tickResources(this.state.resources, deltaMs);
+    this.world.tickStructures(this.state.structures, this.state.players);
   }
 
   private respawnPlayer(player: PlayerSchema) {
     const classDef = CLASS_DEFINITIONS[player.classKey as PlayerClass];
-    player.hp = classDef?.stats.maxHp ?? 100;
-    player.energy = classDef?.stats.maxEnergy ?? 100;
-    player.x = 400 + Math.random() * 800;
-    player.y = 400 + Math.random() * 400;
+    player.hp = player.maxHp || classDef?.stats.maxHp || 100;
+    player.energy = player.maxEnergy || classDef?.stats.maxEnergy || 100;
+    const spawn = sanctumSpawn();
+    player.x = spawn.x;
+    player.y = spawn.y;
     player.isAlive = true;
     player.animState = 'idle';
     player.respawnTimer = 0;
@@ -234,7 +282,20 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
     if (!player) return;
     player.xp += amount;
     this.xpAccumulated.set(sessionId, (this.xpAccumulated.get(sessionId) ?? 0) + amount);
-    this.clients.find((c) => c.sessionId === sessionId)?.send(MSG.XP_GAINED, { playerId: sessionId, amount, total: player.xp });
+    const client = this.clients.find((c) => c.sessionId === sessionId);
+    client?.send(MSG.XP_GAINED, { playerId: sessionId, amount, total: player.xp });
+
+    // Level up: small permanent stat bump + full heal.
+    const newLevel = levelFromXp(player.xp);
+    if (newLevel > player.level) {
+      player.level = newLevel;
+      player.maxHp += 10;
+      player.maxEnergy += 5;
+      player.attackDamage += 2;
+      player.hp = player.maxHp;
+      player.energy = player.maxEnergy;
+      client?.send(MSG.LEVEL_UP, { playerId: sessionId, level: newLevel });
+    }
   }
 
   private async endMatch(reason: string) {
@@ -260,7 +321,7 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
       metadata: { reason, players: playerSummary },
     });
 
-    for (const [sid, info] of Object.entries(playerSummary)) {
+    for (const info of Object.values(playerSummary)) {
       if (!info.userId) continue;
       await incrementPlayerStats(info.userId, {
         games_played: 1,

@@ -7,7 +7,7 @@ import { persistMatchResult, incrementPlayerStats } from '../db/supabase.js';
 import { CLASS_DEFINITIONS, DUEL_DURATION_MS, TICK_MS, ENERGY_REGEN_PER_TICK, CHAT_MAX_LENGTH, ALIAS_MAX_LENGTH } from '@fmr/shared';
 import { sanitizeAlias, clamp } from '@fmr/shared';
 import { MSG } from '@fmr/shared';
-import type { PlayerClass, PlayerInputPayload } from '@fmr/shared';
+import type { AbilityKey, PlayerClass, PlayerInputPayload } from '@fmr/shared';
 
 export interface DuelJoinOptions {
   alias?: string;
@@ -138,7 +138,7 @@ export class DuelRoom extends Room<{ state: DuelRoomState }> {
       let totalDy = 0;
       let latestAimX = player.x;
       let latestAimY = player.y;
-      let abilityToUse: string | null = null;
+      let abilityToUse: AbilityKey | null = null;
 
       for (const input of queue) {
         totalDx += input.dx;
@@ -174,7 +174,7 @@ export class DuelRoom extends Room<{ state: DuelRoomState }> {
           }
         });
       } else if (abilityToUse) {
-        const results = this.combat.applyAbility(sessionId, abilityToUse as any, latestAimX, latestAimY, this.state.players, this.state.players, now);
+        const results = this.combat.applyAbility(sessionId, abilityToUse, latestAimX, latestAimY, this.state.players, this.state.players, now);
         results.forEach((r) => {
           this.broadcast(MSG.DAMAGE_EVENT, { targetId: r.targetId, sourceId: sessionId, amount: r.amount, isPlayer: r.isPlayer });
           if (r.killed && r.isPlayer) this.endMatch(sessionId);

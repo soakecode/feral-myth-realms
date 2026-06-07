@@ -32,7 +32,32 @@ export interface PlayerState {
   attackRange: number;
   authMode: string;
   teamId: number;
+  essence: number;
+  wood: number;
+  stone: number;
+  runeShard: number;
   cooldowns: CooldownsState;
+}
+
+export interface ResourceNodeState {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  amount: number;
+  available: boolean;
+  respawnTimer: number;
+}
+
+export interface StructureState {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  ownerId: string;
+  ownerAlias: string;
+  teamId: number;
+  createdAt: number;
 }
 
 export interface EnemyState {
@@ -75,6 +100,18 @@ export interface RealmRoomState {
     onAdd: (cb: (sanctuary: SanctuaryState, idx: number) => void) => void;
     get: (idx: number) => SanctuaryState | undefined;
     forEach: (cb: (sanctuary: SanctuaryState, idx: number) => void) => void;
+  };
+  resources: Map<string, ResourceNodeState> & {
+    onAdd: (cb: (node: ResourceNodeState, key: string) => void) => void;
+    onRemove: (cb: (node: ResourceNodeState, key: string) => void) => void;
+    get: (key: string) => ResourceNodeState | undefined;
+    forEach: (cb: (node: ResourceNodeState, key: string) => void) => void;
+  };
+  structures: Map<string, StructureState> & {
+    onAdd: (cb: (s: StructureState, key: string) => void) => void;
+    onRemove: (cb: (s: StructureState, key: string) => void) => void;
+    get: (key: string) => StructureState | undefined;
+    forEach: (cb: (s: StructureState, key: string) => void) => void;
   };
   elapsedMs: number;
   matchActive: boolean;

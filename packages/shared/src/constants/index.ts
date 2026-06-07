@@ -5,8 +5,9 @@
 export const TICK_RATE = 20; // server ticks per second
 export const TICK_MS = 1000 / TICK_RATE;
 
-export const MAP_WIDTH = 1600;
-export const MAP_HEIGHT = 1200;
+// Legacy aliases — the authoritative world size lives in `world/index.ts` (WORLD).
+export const MAP_WIDTH = 4000;
+export const MAP_HEIGHT = 3000;
 
 export const RESPAWN_TIME_MS = 5000;
 export const ENEMY_RESPAWN_TIME_MS = 15000;

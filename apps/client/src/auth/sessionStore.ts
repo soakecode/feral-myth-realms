@@ -12,6 +12,7 @@ export interface PlayerSession {
 }
 
 const SESSION_KEY = 'fmr_session';
+const GUEST_ID_KEY = 'fmr_guest_id';
 
 export function saveSession(session: PlayerSession) {
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
@@ -35,12 +36,20 @@ export function createGuestSession(alias: string, classKey: PlayerClass): Player
   return {
     mode: 'guest',
     userId: null,
-    guestId: generateGuestId(),
+    guestId: getOrCreateGuestId(),
     alias,
     classKey,
     authToken: null,
     displayName: alias,
   };
+}
+
+function getOrCreateGuestId(): string {
+  const existing = localStorage.getItem(GUEST_ID_KEY);
+  if (existing) return existing;
+  const guestId = generateGuestId();
+  localStorage.setItem(GUEST_ID_KEY, guestId);
+  return guestId;
 }
 
 export function createRegisteredSession(

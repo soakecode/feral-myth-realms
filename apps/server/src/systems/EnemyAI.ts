@@ -1,40 +1,23 @@
 import { MapSchema } from '@colyseus/schema';
 import { PlayerSchema } from '../schema/PlayerSchema.js';
 import { EnemySchema } from '../schema/EnemySchema.js';
-import { ENEMY_DEFINITIONS } from '@fmr/shared';
-import { distance, clamp, normalize } from '@fmr/shared';
+import { ENEMY_DEFINITIONS, ENEMY_SPAWNS } from '@fmr/shared';
+import { distance, clamp, normalize, WORLD } from '@fmr/shared';
 import type { EnemyType } from '@fmr/shared';
 import { CombatSystem } from './CombatSystem.js';
 
-const MAP_W = 1600;
-const MAP_H = 1200;
-
-interface EnemySpawnPoint {
-  type: EnemyType;
-  x: number;
-  y: number;
-}
-
-const SPAWN_POINTS: EnemySpawnPoint[] = [
-  { type: 'wisp', x: 200, y: 200 },
-  { type: 'wisp', x: 1400, y: 200 },
-  { type: 'wisp', x: 200, y: 1000 },
-  { type: 'wisp', x: 1400, y: 1000 },
-  { type: 'bramble_beast', x: 300, y: 600 },
-  { type: 'bramble_beast', x: 1300, y: 600 },
-  { type: 'rune_imp', x: 800, y: 150 },
-  { type: 'rune_imp', x: 800, y: 1050 },
-];
+const MAP_W = WORLD.width;
+const MAP_H = WORLD.height;
 
 export class EnemyAI {
   private lastAttackTime: Map<string, number> = new Map();
   private combat = new CombatSystem();
 
   initEnemies(enemies: MapSchema<EnemySchema>) {
-    SPAWN_POINTS.forEach((sp, i) => {
+    ENEMY_SPAWNS.forEach((sp) => {
       const def = ENEMY_DEFINITIONS[sp.type];
       const enemy = new EnemySchema();
-      enemy.id = `enemy_${i}`;
+      enemy.id = sp.id;
       enemy.type = sp.type;
       enemy.x = sp.x + (Math.random() - 0.5) * 40;
       enemy.y = sp.y + (Math.random() - 0.5) * 40;
@@ -125,8 +108,7 @@ export class EnemyAI {
   }
 
   private respawnEnemy(enemy: EnemySchema, id: string) {
-    const idx = parseInt(id.replace('enemy_', ''), 10);
-    const sp = SPAWN_POINTS[idx % SPAWN_POINTS.length];
+    const sp = ENEMY_SPAWNS.find((s) => s.id === id);
     if (!sp) return;
     const def = ENEMY_DEFINITIONS[sp.type];
     enemy.x = sp.x + (Math.random() - 0.5) * 40;

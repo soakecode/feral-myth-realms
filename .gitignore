@@ -15,3 +15,7 @@ coverage/
 apps/client/dist/
 apps/server/dist/
 packages/shared/dist/
+
+# Concept-art source styleboards live at repo root with non-ASCII names.
+# The served copies in apps/client/public/assets/concept/ ARE versioned.
+/*.png

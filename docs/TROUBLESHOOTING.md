@@ -1,195 +1,161 @@
-# Troubleshooting — Feral Myth: Realms
+# Troubleshooting - Feral Myth: Realms
 
-## CORS Error (browser console)
+## `npm` no carga en PowerShell
 
-**Symptom**: `Access-Control-Allow-Origin` error when connecting to server.
+Sintoma:
 
-**Fix**:
+```text
+No se puede cargar el archivo npm.ps1 porque la ejecucion de scripts esta deshabilitada
+```
+
+Solucion:
+
+```bash
+npm.cmd install
+npm.cmd run dev
+```
+
+Tambien puedes ejecutar los comandos desde CMD, Git Bash o una PowerShell con policy configurada por el usuario.
+
+## Vite falla con `Access is denied`
+
+Sintoma:
+
+```text
+Cannot read directory "../../../..": Access is denied.
+Could not resolve ".../apps/client/vite.config.ts"
+```
+
+Esto puede ocurrir dentro del sandbox de Codex al cargar Vite/esbuild. En una terminal normal del proyecto, `npm run build` y `npm run dev` fueron verificados correctamente.
+
+Soluciones:
+
+- Ejecuta desde una terminal normal.
+- En Codex, permite ejecucion fuera del sandbox para `npm.cmd run build` o `npm.cmd run dev`.
+- Verifica que estas en `C:\Users\Germa\Desktop\feral-myth-realms`.
+
+## El servidor responde health pero no puedo entrar a room
+
+Comprueba:
+
+```bash
+http://localhost:2567/health
+http://localhost:2567/colyseus
+```
+
+Si `joinOrCreate("realm")` hace timeout:
+
+1. Para procesos viejos de dev.
+2. Revisa que no haya otro proceso en 2567.
+3. Reinicia `npm run dev`.
+4. Confirma en logs que aparece `Feral Myth: Realms server on port 2567`.
+
+En Windows puedes localizar puertos con:
+
+```bash
+netstat -ano | findstr ":2567"
+netstat -ano | findstr ":5173"
+```
+
+## WebSocket no conecta desde el cliente
+
+Comprueba `VITE_GAME_SERVER_URL`.
+
+Local:
+
 ```env
-# apps/server/.env
-CLIENT_ORIGIN=http://localhost:5173   # dev
-CLIENT_ORIGIN=https://your-site.pages.dev  # production
-```
-Make sure the value matches the *exact* origin (no trailing slash).
-
----
-
-## WebSocket won't connect
-
-**Symptom**: `colyseus.js` shows connection refused or timeout.
-
-**Checklist**:
-1. Is the server running? `npm run dev:server` — check for errors
-2. Does `http://localhost:2567/health` respond?
-3. Check `VITE_GAME_SERVER_URL` in `.env`:
-   - Dev: `ws://localhost:2567`
-   - Production: `wss://your-server.onrender.com` (must use wss://)
-4. On mobile (same network): use `ws://YOUR_LAN_IP:2567`
-5. Firewall: ensure port 2567 is open locally
-
----
-
-## Supabase Auth fails
-
-**Symptom**: Sign-in returns error, or user row not created.
-
-**Checklist**:
-1. Verify `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are correct
-2. Check Supabase Dashboard → Auth → **Email** provider is enabled
-3. Check **Site URL** in Supabase Auth settings matches your domain
-4. If using email confirmation: verify the email before testing sign-in
-5. Check browser console for specific Supabase error messages
-6. Test with Supabase Dashboard → SQL Editor:
-   ```sql
-   SELECT * FROM auth.users LIMIT 5;
-   SELECT * FROM profiles LIMIT 5;
-   ```
-7. If profiles table is empty after signup: check the `handle_new_user` trigger:
-   ```sql
-   SELECT * FROM pg_trigger WHERE tgname = 'on_auth_user_created';
-   ```
-
----
-
-## Environment variables not working
-
-**Symptom**: `VITE_SUPABASE_URL` is undefined in browser.
-
-**Fix**:
-- All client vars **must** start with `VITE_`
-- The `.env` file must be in the **project root** (`feral-myth-realms/.env`)
-- Restart `npm run dev:client` after changing `.env`
-- In production (Cloudflare Pages/Vercel), set vars in the platform dashboard
-
----
-
-## PWA won't install
-
-**Symptom**: No install prompt, or service worker errors.
-
-**Checklist**:
-1. Must be served over **HTTPS** (or `localhost`)
-2. Icons must exist: `apps/client/public/icons/icon-192.png` and `icon-512.png`
-   - Generate them: `node apps/client/scripts/gen-png-icons.cjs`
-3. `manifest.webmanifest` must be accessible at root
-4. Open Chrome DevTools → **Application → Manifest** — check for errors
-5. Check **Application → Service Workers** for registration errors
-6. Clear service worker cache: DevTools → Application → Service Workers → **Unregister**
-
----
-
-## Build fails
-
-**Symptom**: `npm run build` returns TypeScript or Vite errors.
-
-**Fix**:
-```bash
-# Check TypeScript errors specifically
-npm run typecheck
-
-# Common causes:
-# 1. Missing @fmr/shared types — ensure packages/shared is built first
-npm run build --workspace=packages/shared
-
-# 2. Colyseus schema decorators
-# The @type() decorators require reflect-metadata in some configs.
-# If you see decorator errors, check tsconfig.json experimentalDecorators setting.
-
-# 3. Missing .env file — Vite needs it even for build
-cp .env.example .env
+VITE_GAME_SERVER_URL=ws://localhost:2567
 ```
 
----
+Dispositivo en la misma red:
 
-## Room won't synchronize / players don't see each other
-
-**Symptom**: Two browser tabs show game but players are in different rooms.
-
-**Fix**:
-- Both players must be in the same **room ID**
-- Use "Unirse a sala cooperativa" (join or create — finds existing room)
-- Or use the room code: one player creates, the other uses the code
-- Check server logs: `npm run dev:server` — look for `[RealmRoom] joined`
-- Check the Colyseus monitor: `http://localhost:2567/colyseus`
-
----
-
-## Render / Railway server sleeps
-
-**Symptom**: First connection after inactivity takes 20–30 seconds, WebSocket timeout.
-
-**Fix**:
-- Render free tier sleeps after 15 minutes of no HTTP traffic
-- Option 1: Upgrade to Render Starter ($7/mo) — no sleep
-- Option 2: Use an uptime monitor (UptimeRobot) to ping `/health` every 10 minutes
-- Option 3: Migrate to Railway (free tier has always-on options)
-- Option 4: Fly.io with `min_machines_running = 1`
-
----
-
-## Colyseus version conflicts
-
-**Symptom**: `@colyseus/core` import errors or room not found.
-
-**Fix**:
-Ensure all Colyseus packages are on the same version:
-```bash
-# Check versions
-npm ls @colyseus/core @colyseus/sdk --all
-
-# If mismatched, update:
-npm install @colyseus/core@^0.15.17 --workspace=apps/server
-npm install @colyseus/sdk@^0.15.17 --workspace=apps/client
+```env
+VITE_GAME_SERVER_URL=ws://TU_IP_LOCAL:2567
 ```
 
----
+Tambien revisa firewall local y que `CLIENT_ORIGIN` coincida con el origen del cliente:
 
-## `colyseus.js` vs `@colyseus/sdk`
-
-**Note**: The client uses `colyseus.js` (browser bundle) via the `@colyseus/sdk` package. The import path is:
-```typescript
-import { Client, Room } from 'colyseus.js';  // correct for browser
+```env
+CLIENT_ORIGIN=http://localhost:5173
 ```
-Not `from '@colyseus/core'` (that is server-only).
 
----
+## Guest mode falla
 
-## Enemy AI not working / enemies frozen
+Guest mode no necesita Supabase.
 
-**Symptom**: Enemies spawn but don't move.
+Comprueba:
 
-**Fix**:
-- Enemies are controlled by the server — check `npm run dev:server` logs
-- The `EnemyAI.tick()` runs every 50ms (TICK_MS)
-- Verify `setSimulationInterval` is called in `RealmRoom.onCreate()`
-- If `TICK_MS` is 0, the interval won't fire — check `packages/shared/src/constants/index.ts`
+- `localStorage` permite escritura.
+- Alias tiene al menos 2 caracteres.
+- No hay errores en consola antes de `AuthScene`.
+- `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` pueden estar vacias.
 
----
+## Supabase no esta configurado
 
-## Stats not saving after match
+Mensaje esperado en servidor local:
 
-**Symptom**: Match ends but `player_stats` not updated in Supabase.
-
-**Fix**:
-1. Server must have `SUPABASE_SERVICE_ROLE_KEY` set (not just anon key)
-2. Player must be **registered** (not guest) — guests have no userId
-3. Check server logs for Supabase write errors
-4. Verify `player_stats` table exists and RLS is configured
-5. Test with SQL Editor:
-   ```sql
-   SELECT * FROM player_stats WHERE user_id = 'your-user-id';
-   ```
-
----
-
-## Service worker caches stale version
-
-**Symptom**: Old game version loads after deploy.
-
-**Fix**:
+```text
+SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set - persistence will be disabled
 ```
-Chrome DevTools → Application → Service Workers → Update
-```
-Or force reload: `Ctrl+Shift+R` (hard reload bypasses service worker cache)
 
-The `vite-plugin-pwa` with `registerType: 'autoUpdate'` should auto-update on new deploys.
+Esto no es un error para guest mode. Solo significa que no habra persistencia.
+
+Para auth real necesitas:
+
+```env
+VITE_SUPABASE_URL=
+VITE_SUPABASE_ANON_KEY=
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+```
+
+La service role key nunca debe ir en variables `VITE_`.
+
+## `npm run build` avisa de chunk grande
+
+Sintoma:
+
+```text
+Some chunks are larger than 500 kB after minification
+```
+
+El build pasa. El aviso viene de Phaser + Three.js en el bundle cliente. No bloquea el slice minimo.
+
+Siguiente mejora recomendada:
+
+- Code splitting por escenas/renderers.
+- Revisar si se mantiene Three.js o se migra gameplay a Phaser.
+
+## PWA no instala
+
+Comprueba:
+
+- `npm run build` genera `apps/client/dist/manifest.webmanifest`.
+- `apps/client/dist/sw.js` existe.
+- El favicon apunta a `/favicon.png`.
+- El sitio se sirve en `localhost` o HTTPS.
+- No hay service worker viejo cacheado.
+
+Para limpiar cache:
+
+1. DevTools > Application > Service Workers.
+2. Unregister.
+3. Hard reload.
+
+## Dos pestanas entran a salas distintas
+
+Usa `Unirse a sala cooperativa` para que el segundo cliente haga `joinOrCreate("realm")`.
+
+Si creas dos salas privadas, no se veran entre si. Revisa el HUD: debe indicar la misma sala o el mismo room code.
+
+## El ataque no hace dano
+
+El ataque basico valida distancia en servidor. Si no hay dano:
+
+- Acercate mas al enemigo.
+- Usa clase con mas rango, por ejemplo `raven_witch`.
+- Apunta con click o pulsa `J`.
+- Verifica que el servidor sigue activo.
+
+Limitacion actual: el ataque basico no valida arco exacto, solo rango.

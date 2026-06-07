@@ -31,5 +31,10 @@ export class PlayerSchema extends Schema {
   @type('number') attackRange: number = 200;
   @type('string') authMode: string = 'guest';
   @type('number') teamId: number = 0;
+  // Resource inventory (session)
+  @type('number') essence: number = 0;
+  @type('number') wood: number = 0;
+  @type('number') stone: number = 0;
+  @type('number') runeShard: number = 0;
   @type(CooldownsSchema) cooldowns: CooldownsSchema = new CooldownsSchema();
 }

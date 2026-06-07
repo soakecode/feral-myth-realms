@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { t } from '../../i18n/index.js';
+import type { I18nKeys } from '../../i18n/es.js';
 import { CLASS_DEFINITIONS } from '@fmr/shared';
 import type { PlayerClass } from '@fmr/shared';
 import type { PlayerSession } from '../../auth/sessionStore.js';
@@ -7,14 +8,14 @@ import { saveSession } from '../../auth/sessionStore.js';
 
 const CLASS_ORDER: PlayerClass[] = ['stag_druid', 'raven_witch', 'wolf_guardian', 'fox_trickster'];
 
-const CLASS_ROLE_KEYS: Record<PlayerClass, string> = {
+const CLASS_ROLE_KEYS: Record<PlayerClass, I18nKeys> = {
   stag_druid: 'class_role_support',
   raven_witch: 'class_role_mage',
   wolf_guardian: 'class_role_tank',
   fox_trickster: 'class_role_mobile',
 };
 
-const CLASS_NAME_KEYS: Record<PlayerClass, string> = {
+const CLASS_NAME_KEYS: Record<PlayerClass, I18nKeys> = {
   stag_druid: 'class_stag_druid',
   raven_witch: 'class_raven_witch',
   wolf_guardian: 'class_wolf_guardian',
@@ -57,8 +58,8 @@ export class ClassSelectScene extends Phaser.Scene {
               ${this.getClassSVG(key, colorHex)}
             </svg>
           </div>
-          <div class="class-name">${t(CLASS_NAME_KEYS[key] as any)}</div>
-          <div class="class-role">${t(CLASS_ROLE_KEYS[key] as any)}</div>
+          <div class="class-name">${t(CLASS_NAME_KEYS[key])}</div>
+          <div class="class-role">${t(CLASS_ROLE_KEYS[key])}</div>
           <div class="class-stats">
             <div class="stat-row"><span>HP</span><div class="stat-bar"><div style="width:${(def.stats.maxHp / 200) * 100}%;background:${colorHex}"></div></div></div>
             <div class="stat-row"><span>DMG</span><div class="stat-bar"><div style="width:${(def.stats.attackDamage / 30) * 100}%;background:${colorHex}"></div></div></div>

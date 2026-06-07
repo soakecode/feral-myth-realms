@@ -1,162 +1,141 @@
 # Feral Myth: Realms
 
-**Multiplayer tactical action RPG** — web/PWA built with Phaser 3 + Colyseus + Supabase.
+Vertical slice web/PWA multijugador con cliente Vite, Phaser como shell de escenas, render de gameplay en Three.js y servidor Node.js + Colyseus.
 
-> Criaturas antropomórficas de fantasía compiten y cooperan por el control de santuarios rúnicos en un archipiélago mítico.
+El objetivo actual no es un RPG completo: es una base jugable local con modo guest, sala Colyseus real, dos jugadores sincronizados, movimiento, enemigos y ataque basico server-side.
 
----
+## Estado verificado
+
+- `npm install` funciona.
+- `npm run typecheck` pasa.
+- `npm run lint` pasa.
+- `npm run test` pasa, con tests en `packages/shared` y `apps/server`.
+- `npm run build` pasa en una terminal normal. En el sandbox de Codex/Vite puede fallar con `Access is denied`.
+- `npm run dev` levanta cliente en `http://localhost:5173` y servidor en `http://localhost:2567`.
+- Multiplayer real verificado con dos clientes Colyseus: misma room, dos jugadores, movimiento sincronizado y dano a enemigo.
 
 ## Stack
 
-| Layer | Technology |
+| Capa | Tecnologia |
 |---|---|
-| Client | Phaser 3 · Vite · TypeScript · PWA |
-| Server | Node.js · Colyseus · TypeScript |
-| Auth & DB | Supabase (PostgreSQL + Auth) |
-| Shared | TypeScript monorepo (npm workspaces) |
+| Cliente | Vite, TypeScript, Phaser 3, Three.js |
+| Servidor | Node.js, Colyseus |
+| Compartido | TypeScript workspace `@fmr/shared` |
+| Auth/DB | Supabase opcional |
 | Tests | Vitest |
-| Lint/Format | ESLint + Prettier |
+| PWA | `vite-plugin-pwa` |
 
----
+Nota tecnica: el repo conserva Phaser 3 para el ciclo de escenas, pero la escena de juego actual oculta el canvas de Phaser y delega el render en `apps/client/src/game3d/Game3D.ts`.
 
 ## Requisitos
 
-- **Node.js ≥ 18**
-- **npm ≥ 9** (workspaces support)
-- Cuenta en [Supabase](https://supabase.com) (opcional para modo guest)
+- Node.js 18 o superior.
+- npm con soporte de workspaces.
+- Supabase es opcional. El modo guest funciona sin variables de Supabase.
 
----
+En PowerShell de Windows, si `npm` falla por execution policy, usa `npm.cmd`.
 
-## Instalación local
+## Instalacion
 
 ```bash
-# 1. Clonar o extraer el proyecto
-cd feral-myth-realms
-
-# 2. Instalar dependencias (todos los workspaces)
 npm install
-
-# 3. Configurar variables de entorno
-cp .env.example .env
-# Edita .env con tus claves de Supabase (ver sección Variables)
-
-# 4. Generar iconos PWA (una sola vez)
-node apps/client/scripts/gen-png-icons.cjs
-
-# 5. Arrancar cliente y servidor en paralelo
-npm run dev
 ```
 
----
+Puedes copiar `.env.example` a `.env`, pero para jugar en guest local no hace falta configurar Supabase.
 
-## Scripts
+## Variables
 
-| Comando | Descripción |
-|---|---|
-| `npm run dev` | Arranca cliente (5173) y servidor (2567) en paralelo |
-| `npm run dev:client` | Solo cliente Vite |
-| `npm run dev:server` | Solo servidor Colyseus |
-| `npm run build` | Compila todo (shared → client → server) |
-| `npm run test` | Ejecuta tests (Vitest) |
-| `npm run lint` | ESLint sobre todo el proyecto |
-| `npm run format` | Prettier sobre todo el proyecto |
-| `npm run typecheck` | TypeScript sin emitir |
-
----
-
-## Cómo ejecutar el juego
-
-### Opción A: Modo invitado (sin Supabase)
-
-1. Copia `.env.example` → `.env` — deja las vars de Supabase vacías
-2. `npm run dev`
-3. Abre `http://localhost:5173`
-4. Haz clic en **"Jugar como invitado"**
-5. Introduce un alias → elige clase → entra al lobby
-
-### Opción B: Con Supabase (cuenta persistente)
-
-1. Crea proyecto en [supabase.com](https://supabase.com)
-2. Copia la URL y las claves al `.env`
-3. Ejecuta las migraciones SQL (ver `docs/DEPLOYMENT.md`)
-4. `npm run dev`
-5. Regístrate con email y contraseña
-
----
-
-## Probar multijugador con dos jugadores
-
-```
-# Ventana / pestaña 1
-http://localhost:5173
-→ Jugar como invitado → alias: "Jugador1" → Crear sala cooperativa
-
-# Ventana / pestaña 2 (o dispositivo en la misma red)
-http://localhost:5173
-→ Jugar como invitado → alias: "Jugador2" → Unirse a sala cooperativa
-```
-
-También puedes usar el **código de sala**: cópialo en el lobby y compártelo.
-
----
-
-## Variables de entorno
-
-### `.env` raíz / `apps/client/`
+Cliente:
 
 ```env
-VITE_SUPABASE_URL=https://tu-proyecto.supabase.co
-VITE_SUPABASE_ANON_KEY=tu-anon-key
 VITE_GAME_SERVER_URL=ws://localhost:2567
+VITE_SUPABASE_URL=
+VITE_SUPABASE_ANON_KEY=
 ```
 
-### `apps/server/` (mismas vars sin prefijo VITE)
+Servidor:
 
 ```env
 PORT=2567
 NODE_ENV=development
-SUPABASE_URL=https://tu-proyecto.supabase.co
-SUPABASE_ANON_KEY=tu-anon-key
-SUPABASE_SERVICE_ROLE_KEY=tu-service-role-key   # SOLO en servidor, NUNCA en cliente
 CLIENT_ORIGIN=http://localhost:5173
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-> ⚠️ La `SUPABASE_SERVICE_ROLE_KEY` da acceso administrativo completo. Jamás la incluyas en el cliente ni en el repositorio.
+`SUPABASE_SERVICE_ROLE_KEY` solo pertenece al servidor. No debe exponerse en el cliente.
 
----
+## Comandos
 
-## Estructura del repositorio
-
-```
-feral-myth-realms/
-├── apps/
-│   ├── client/          # Phaser 3 + Vite (puerto 5173)
-│   └── server/          # Colyseus Node.js (puerto 2567)
-├── packages/
-│   └── shared/          # Tipos, constantes y utilidades compartidas
-├── supabase/
-│   └── migrations/      # SQL: schema, RLS, seed
-├── docs/                # Documentación técnica
-├── .env.example         # Plantilla de variables de entorno
-└── README.md
+```bash
+npm run dev
+npm run typecheck
+npm run lint
+npm run test
+npm run build
 ```
 
----
+Puertos por defecto:
 
-## Documentación detallada
+- Cliente: `http://localhost:5173`
+- Servidor: `http://localhost:2567`
+- Healthcheck: `http://localhost:2567/health`
+- Monitor Colyseus dev: `http://localhost:2567/colyseus`
 
-| Archivo | Contenido |
-|---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Arquitectura, flujos, decisiones técnicas |
-| [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) | Clases, habilidades, enemigos, modos |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Despliegue en Vercel / Render / Fly.io |
-| [docs/TESTING.md](docs/TESTING.md) | Cómo probar todo manualmente |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Hoja de ruta futura |
-| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Errores frecuentes y soluciones |
+## Como jugar en guest
 
----
+1. Ejecuta `npm run dev`.
+2. Abre `http://localhost:5173`.
+3. Pulsa `Jugar como invitado`.
+4. Escribe un alias.
+5. Elige una clase.
+6. Crea o entra a una sala realm.
 
-## Ayuda y feedback
+## Probar dos jugadores
 
-- Issues: abre un ticket en el repositorio
-- Monitor Colyseus (dev): `http://localhost:2567/colyseus`
+1. Abre una pestana en `http://localhost:5173`.
+2. Entra como guest con alias `Jugador1`.
+3. Elige clase y crea/entra en sala realm.
+4. Abre una segunda pestana o navegador.
+5. Entra como guest con alias `Jugador2`.
+6. Usa `Unirse a sala cooperativa`.
+7. Mueve un jugador con WASD o flechas.
+8. Verifica que el otro cliente ve el movimiento.
+9. Usa `J` o click para atacar. Si estas cerca de un enemigo, el servidor aplica dano y hay feedback visual.
+
+## Que funciona ahora (vertical slice de exploracion)
+
+Bucle jugable: **explora → recolecta → derrota criaturas → construye → progresa**.
+
+- Guest mode con `guestId` persistente en `localStorage` y seleccion de clase.
+- Room Colyseus `realm` real: join/leave, estado compartido, multijugador sincronizado.
+- **Mundo amplio 4000×3000** con 4 biomas (Bosque Esmeralda, Ruinas Obsidiana,
+  Marismas Lunaresa, Hondonada Sumida) + Santuario central de aparicion.
+- **Obstaculos con colision real** server-side (arboles/rocas/ruinas bloquean; agua ralentiza),
+  con deslizamiento por ejes. Datos en `@fmr/shared` (`world/`), compartidos por cliente y servidor.
+- **Recursos recolectables** (Esencia, Madera, Piedra, Fragmento runico): nodos sincronizados,
+  recoleccion server-authoritative (`F` o boton tactil), respawn, inventario en HUD.
+- **Construccion**: Hoguera (cura aliados cercanos) y Totem (revela zona). Validacion de coste y
+  posicion en servidor; estructuras sincronizadas entre jugadores.
+- **Enemigos con identidad** (Wisp, Bramble Beast, Rune Imp) con nombre, barra de vida,
+  forma/color/animacion propios y recompensa de XP por tipo.
+- **Objetivos** (questline de onboarding) y **progresion**: XP por recolectar/matar/construir,
+  subida de nivel con mejora de stats.
+- **HUD**: HP/EN/XP, recursos, objetivos, nombre de zona, **minimapa**, jugadores conectados,
+  navegacion contextual ("Volver al campamento").
+- Render 3D (Three.js, renderer Canvas-compatible) con iluminacion, sombras y camara isometrica.
+- Assets de concept art localizados y documentados (`docs/ASSETS.md`, `assetManifest.ts`).
+- PWA genera manifest y service worker en build.
+
+## Limitaciones conocidas
+
+- El gameplay renderiza con Three.js, no con sprites Phaser puros.
+- Los assets son procedurales/placeholders.
+- Tests de salas completas `RealmRoom` y `DuelRoom` aun no existen.
+- Supabase esta preparado, pero el slice local validado usa guest mode.
+- El ataque basico valida distancia, no arco/direccion exacta.
+- El bundle cliente es grande por Three.js/Phaser; Vite avisa de chunk superior a 500 kB.
+- La verificacion visual con navegador integrado de Codex fallo por el runtime del entorno; el multiplayer se verifico con clientes Colyseus Node.
+
+Mas detalle en `docs/CODEX_AUDIT.md`, `docs/TESTING.md`, `docs/TROUBLESHOOTING.md` y `docs/ROADMAP.md`.

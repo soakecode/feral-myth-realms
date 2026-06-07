@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'icons/*.png'],
+      includeAssets: ['favicon.png', 'icons/*.png'],
       manifest: {
         name: 'Feral Myth: Realms',
         short_name: 'FMR',
@@ -36,6 +36,9 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // Don't precache the large concept-art styleboards (~2MB each); they
+        // load on demand as backgrounds / references.
+        globIgnores: ['**/assets/concept/**'],
         // The Three.js bundle pushes the main chunk past the 2 MiB default.
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         runtimeCaching: [

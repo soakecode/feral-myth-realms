@@ -1,5 +1,4 @@
 import Phaser from 'phaser';
-import { CLASS_DEFINITIONS } from '@fmr/shared';
 import type { PlayerClass } from '@fmr/shared';
 
 const CLASS_COLORS: Record<PlayerClass, number> = {

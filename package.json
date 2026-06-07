@@ -15,7 +15,7 @@
     "build:client": "npm run build --workspace=apps/client",
     "build:server": "npm run build --workspace=apps/server",
     "test": "npm run test --workspace=packages/shared --workspace=apps/server -- --passWithNoTests",
-    "lint": "eslint . --ext .ts,.tsx",
+    "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
     "typecheck": "tsc -b apps/client/tsconfig.json apps/server/tsconfig.json packages/shared/tsconfig.json"
   },

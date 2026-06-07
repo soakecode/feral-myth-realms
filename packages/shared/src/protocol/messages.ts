@@ -8,6 +8,8 @@ export const MSG = {
   CHAT: 'chat',
   EMOTE: 'emote',
   READY: 'ready',
+  HARVEST: 'harvest',
+  BUILD: 'build',
 
   // Server → Client
   PLAYER_JOINED: 'player_joined',
@@ -20,6 +22,10 @@ export const MSG = {
   SANCTUARY_UPDATE: 'sanctuary_update',
   XP_GAINED: 'xp_gained',
   LEVEL_UP: 'level_up',
+  RESOURCE_GAINED: 'resource_gained',
+  STRUCTURE_BUILT: 'structure_built',
+  BUILD_DENIED: 'build_denied',
+  ZONE_ENTERED: 'zone_entered',
   MATCH_END: 'match_end',
   CHAT_MESSAGE: 'chat_message',
   ERROR: 'error',
