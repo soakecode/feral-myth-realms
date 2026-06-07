@@ -13,9 +13,23 @@ import { DuelRoom } from './rooms/DuelRoom.js';
 const gameServer = new Server({
   transport: new WebSocketTransport(),
   express: async (app) => {
+    // Allow the configured origin, any deployment of this Cloudflare Pages
+    // project (bare domain, branch aliases, per-deploy hashes), and localhost.
+    const isAllowedOrigin = (origin?: string): boolean => {
+      if (!origin) return true; // non-browser clients (no Origin header)
+      if (origin === env.CLIENT_ORIGIN) return true;
+      try {
+        const host = new URL(origin).hostname;
+        if (host === 'localhost' || host === '127.0.0.1') return true;
+        if (host === 'feral-myth-realms.pages.dev' || host.endsWith('.feral-myth-realms.pages.dev')) return true;
+      } catch {
+        /* malformed origin */
+      }
+      return false;
+    };
     app.use(
       cors({
-        origin: env.CLIENT_ORIGIN,
+        origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
         methods: ['GET', 'POST'],
         credentials: true,
       })

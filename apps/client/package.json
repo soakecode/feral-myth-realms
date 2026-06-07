@@ -11,12 +11,14 @@
   },
   "dependencies": {
     "@colyseus/sdk": "^0.17.42",
+    "@fmr/shared": "*",
     "@supabase/supabase-js": "^2.43.0",
     "phaser": "^3.80.1",
-    "@fmr/shared": "*"
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
+    "@types/three": "^0.184.1",
     "typescript": "^5.4.5",
     "vite": "^5.2.11",
     "vite-plugin-pwa": "^0.20.0"
