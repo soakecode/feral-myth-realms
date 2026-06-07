@@ -20,7 +20,9 @@ services:
     # Build from the monorepo root so npm workspaces resolves @fmr/shared,
     # which esbuild then inlines into the server bundle.
     rootDir: .
-    buildCommand: npm install && npm run build:server
+    # --include=dev is required: NODE_ENV=production makes npm skip devDependencies,
+    # but esbuild (the server bundler) lives in devDependencies and is needed at build time.
+    buildCommand: npm install --include=dev && npm run build:server
     startCommand: npm start --workspace=apps/server
     healthCheckPath: /health
     autoDeploy: true
