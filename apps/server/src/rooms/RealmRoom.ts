@@ -1,6 +1,7 @@
 import { Room, Client } from '@colyseus/core';
 import { RealmRoomState } from '../schema/RealmRoomState.js';
 import { PlayerSchema } from '../schema/PlayerSchema.js';
+import { StructureSchema } from '../schema/StructureSchema.js';
 import { EnemyAI } from '../systems/EnemyAI.js';
 import { CombatSystem } from '../systems/CombatSystem.js';
 import { initSanctuaries, tickSanctuaries } from '../systems/SanctuarySystem.js';
@@ -11,7 +12,7 @@ import {
   CLASS_DEFINITIONS, CHAT_MAX_LENGTH, ALIAS_MAX_LENGTH, TICK_MS, ENERGY_REGEN_PER_TICK,
   WORLD, XP_PER_ENEMY_KILL, HARVEST_COOLDOWN_MS,
 } from '@fmr/shared';
-import { sanitizeAlias, clamp, generateRoomCode, isBlocked, slowFactorAt, levelFromXp } from '@fmr/shared';
+import { sanitizeAlias, clamp, generateRoomCode, isBlocked, slowFactorAt, levelFromXp, distance } from '@fmr/shared';
 import { MSG } from '@fmr/shared';
 import type { AbilityKey, PlayerClass, PlayerInputPayload, StructureType } from '@fmr/shared';
 
@@ -250,8 +251,8 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
       }
     });
 
-    // Enemy AI tick
-    const enemyDamage = this.enemyAI.tick(this.state.enemies, this.state.players, deltaMs, now);
+    // Enemy AI tick (walls block creatures)
+    const enemyDamage = this.enemyAI.tick(this.state.enemies, this.state.players, deltaMs, now, this.state.structures);
     enemyDamage.forEach((ev) => {
       this.broadcast(MSG.DAMAGE_EVENT, { targetId: ev.targetId, sourceId: ev.sourceId, amount: ev.amount, isPlayer: true });
     });
@@ -268,13 +269,28 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
     const classDef = CLASS_DEFINITIONS[player.classKey as PlayerClass];
     player.hp = player.maxHp || classDef?.stats.maxHp || 100;
     player.energy = player.maxEnergy || classDef?.stats.maxEnergy || 100;
-    const spawn = sanctumSpawn();
+    // Forward respawn at the nearest shelter, else the sanctum glade.
+    const shelter = this.nearestShelter(player.x, player.y);
+    const spawn = shelter
+      ? { x: shelter.x + (Math.random() - 0.5) * 70, y: shelter.y + (Math.random() - 0.5) * 70 }
+      : sanctumSpawn();
     player.x = spawn.x;
     player.y = spawn.y;
     player.isAlive = true;
     player.animState = 'idle';
     player.respawnTimer = 0;
     this.broadcast(MSG.PLAYER_RESPAWNED, { playerId: player.id });
+  }
+
+  private nearestShelter(x: number, y: number): StructureSchema | null {
+    let best: StructureSchema | null = null;
+    let bestD = Infinity;
+    this.state.structures.forEach((s: StructureSchema) => {
+      if (s.type !== 'shelter') return;
+      const d = distance(x, y, s.x, s.y);
+      if (d < bestD) { bestD = d; best = s; }
+    });
+    return best;
   }
 
   private awardXp(sessionId: string, amount: number) {

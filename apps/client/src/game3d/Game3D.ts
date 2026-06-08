@@ -733,6 +733,39 @@ export class Game3D {
       // soft heal-radius ring
       const aura = new THREE.Mesh(new THREE.RingGeometry(def.radius - 4, def.radius, 40), new THREE.MeshBasicMaterial({ color: def.color, transparent: true, opacity: 0.12, side: THREE.DoubleSide }));
       aura.rotation.x = -Math.PI / 2; aura.position.y = 1; g.add(aura);
+    } else if (type === 'wall') {
+      const mat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 1, flatShading: true });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(74, 46, 26), mat);
+      body.position.y = 23; body.castShadow = true; body.receiveShadow = true; g.add(body);
+      for (let i = -1; i <= 1; i++) {
+        const cr = new THREE.Mesh(new THREE.BoxGeometry(16, 12, 26), mat);
+        cr.position.set(i * 27, 52, 0); cr.castShadow = true; g.add(cr);
+      }
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(75, 4, 27), new THREE.MeshStandardMaterial({ color: 0x6f6354, roughness: 1, flatShading: true }));
+      seam.position.y = 30; g.add(seam);
+    } else if (type === 'barracks') {
+      const tent = new THREE.Mesh(new THREE.ConeGeometry(34, 46, 4), new THREE.MeshStandardMaterial({ color: def.color, roughness: 1, flatShading: true }));
+      tent.rotation.y = Math.PI / 4; tent.position.y = 23; tent.castShadow = true; g.add(tent);
+      const door = new THREE.Mesh(new THREE.BoxGeometry(12, 18, 2), new THREE.MeshStandardMaterial({ color: 0x3a2a18, roughness: 1 }));
+      door.position.set(0, 9, 24); g.add(door);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 60, 6), new THREE.MeshStandardMaterial({ color: 0x5a4a32, roughness: 1 }));
+      pole.position.set(28, 30, -10); pole.castShadow = true; g.add(pole);
+      const flag = new THREE.Mesh(new THREE.PlaneGeometry(22, 13), new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 1, side: THREE.DoubleSide }));
+      flag.position.set(39, 50, -10); g.add(flag);
+      const aura = new THREE.Mesh(new THREE.RingGeometry(def.radius - 4, def.radius, 48), new THREE.MeshBasicMaterial({ color: 0xffcf6a, transparent: true, opacity: 0.07, side: THREE.DoubleSide }));
+      aura.rotation.x = -Math.PI / 2; aura.position.y = 1; g.add(aura);
+    } else if (type === 'shelter') {
+      const base = new THREE.Mesh(new THREE.BoxGeometry(52, 34, 46), new THREE.MeshStandardMaterial({ color: 0xb9a07a, roughness: 1, flatShading: true }));
+      base.position.y = 17; base.castShadow = true; base.receiveShadow = true; g.add(base);
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(42, 28, 4), new THREE.MeshStandardMaterial({ color: def.color, roughness: 1, flatShading: true }));
+      roof.rotation.y = Math.PI / 4; roof.position.y = 48; roof.castShadow = true; g.add(roof);
+      const door = new THREE.Mesh(new THREE.BoxGeometry(14, 22, 2), new THREE.MeshStandardMaterial({ color: 0x4a3420, roughness: 1, emissive: 0xffcf6a, emissiveIntensity: 0.6 }));
+      door.position.set(0, 11, 24); g.add(door);
+      const beacon = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 90, 8), new THREE.MeshBasicMaterial({ color: 0x9fd6ff, transparent: true, opacity: 0.32 }));
+      beacon.position.y = 78; g.add(beacon);
+      const light = new THREE.PointLight(0xffe0a0, 0.9, 220); light.position.set(0, 26, 0); g.add(light);
+      const aura = new THREE.Mesh(new THREE.RingGeometry(def.radius - 4, def.radius, 48), new THREE.MeshBasicMaterial({ color: 0x9fd6ff, transparent: true, opacity: 0.07, side: THREE.DoubleSide }));
+      aura.rotation.x = -Math.PI / 2; aura.position.y = 1; g.add(aura);
     } else {
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(7, 9, 70, 7), new THREE.MeshStandardMaterial({ color: 0x6b5a3a, roughness: 1, flatShading: true }));
       pole.position.y = 35; pole.castShadow = true;
@@ -1014,6 +1047,9 @@ export class Game3D {
     else if (code === 'KeyV') this.toggleCamera();
     else if (code === 'Digit1') this.selectBuild('campfire');
     else if (code === 'Digit2') this.selectBuild('totem');
+    else if (code === 'Digit3') this.selectBuild('wall');
+    else if (code === 'Digit4') this.selectBuild('barracks');
+    else if (code === 'Digit5') this.selectBuild('shelter');
     else if (code === 'Escape') this.cancelBuild();
   }
 
@@ -1351,7 +1387,7 @@ export class Game3D {
           color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer}
         #game-hud3d #respawn3d{position:absolute;top:44%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.78);
           color:#ff6b6b;border:2px solid #ff5252;border-radius:12px;padding:16px 30px;font-weight:bold;text-align:center;display:none}
-        #game-hud3d #build3d{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:none;gap:10px;pointer-events:auto}
+        #game-hud3d #build3d{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:none;flex-wrap:wrap;justify-content:center;gap:8px;max-width:min(620px,96vw);pointer-events:auto}
         #game-hud3d #build3d button{background:rgba(10,16,26,.85);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:8px;
           padding:8px 12px;font-size:12px;cursor:pointer;text-align:center;min-width:120px}
         #game-hud3d #buildbtn3d{position:absolute;bottom:14px;left:12px;pointer-events:auto;background:rgba(10,16,26,.7);color:#fff;
@@ -1413,6 +1449,9 @@ export class Game3D {
       <div id="build3d">
         <button data-build="campfire">🔥 Hoguera<br><small>3🪵 2✦</small></button>
         <button data-build="totem">🗿 Tótem<br><small>3🪨 2✦</small></button>
+        <button data-build="wall">🧱 Muro<br><small>3🪨</small></button>
+        <button data-build="barracks">🏕️ Entrenamiento<br><small>4🪵 2🪨</small></button>
+        <button data-build="shelter">🏠 Refugio<br><small>4🪵 2✦</small></button>
       </div>
       <div id="respawn3d">Caído en batalla<br><span style="font-size:13px;font-weight:normal">Reapareciendo en el santuario…</span></div>
       <div id="settingsmenu3d" role="dialog" aria-modal="true" aria-label="Ajustes">

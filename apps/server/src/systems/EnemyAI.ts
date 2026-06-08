@@ -1,10 +1,12 @@
 import { MapSchema } from '@colyseus/schema';
 import { PlayerSchema } from '../schema/PlayerSchema.js';
 import { EnemySchema } from '../schema/EnemySchema.js';
+import { StructureSchema } from '../schema/StructureSchema.js';
 import { ENEMY_DEFINITIONS, ENEMY_SPAWNS } from '@fmr/shared';
 import { distance, clamp, normalize, WORLD } from '@fmr/shared';
 import type { EnemyType } from '@fmr/shared';
 import { CombatSystem } from './CombatSystem.js';
+import { blockedByStructure } from './WorldSystem.js';
 
 const MAP_W = WORLD.width;
 const MAP_H = WORLD.height;
@@ -33,7 +35,8 @@ export class EnemyAI {
     enemies: MapSchema<EnemySchema>,
     players: MapSchema<PlayerSchema>,
     deltaMs: number,
-    now: number
+    now: number,
+    structures?: MapSchema<StructureSchema>
   ): Array<{ sourceId: string; targetId: string; amount: number }> {
     const damageEvents: Array<{ sourceId: string; targetId: string; amount: number }> = [];
 
@@ -81,8 +84,12 @@ export class EnemyAI {
       // Move toward player if not in attack range
       if (dist > def.attackRange) {
         const norm = normalize(player.x - enemy.x, player.y - enemy.y);
-        enemy.x = clamp(enemy.x + norm.x * def.moveSpeed * (deltaMs / 1000), 50, MAP_W - 50);
-        enemy.y = clamp(enemy.y + norm.y * def.moveSpeed * (deltaMs / 1000), 50, MAP_H - 50);
+        const dt = deltaMs / 1000;
+        const nx = clamp(enemy.x + norm.x * def.moveSpeed * dt, 50, MAP_W - 50);
+        const ny = clamp(enemy.y + norm.y * def.moveSpeed * dt, 50, MAP_H - 50);
+        // Walls block creatures (axis-separated so they slide along the wall).
+        if (!structures || !blockedByStructure(nx, enemy.y, 18, structures)) enemy.x = nx;
+        if (!structures || !blockedByStructure(enemy.x, ny, 18, structures)) enemy.y = ny;
         enemy.animState = 'walk';
 
         // Rune imp erratic movement

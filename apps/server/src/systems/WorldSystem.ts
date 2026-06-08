@@ -93,10 +93,11 @@ export class WorldSystem {
     if (distance(player.x, player.y, x, y) > BUILD_RANGE) return { error: 'Demasiado lejos' };
     if (isBlocked(x, y, 24)) return { error: 'No se puede construir aquí' };
 
-    // not too close to an existing structure
+    // not too close to an existing structure (walls may sit closer to form lines)
     let tooClose = false;
     structures.forEach((s) => {
-      if (distance(s.x, s.y, x, y) < 80) tooClose = true;
+      const minGap = structureType === 'wall' && s.type === 'wall' ? 50 : 80;
+      if (distance(s.x, s.y, x, y) < minGap) tooClose = true;
     });
     if (tooClose) return { error: 'Hay otra construcción cerca' };
 
@@ -127,17 +128,38 @@ export class WorldSystem {
     return { type: structureType, xp: def.xp };
   }
 
-  /** Apply ongoing structure effects (campfire healing). */
+  /** Apply ongoing structure effects (campfire/shelter heal, barracks energy). */
   tickStructures(structures: MapSchema<StructureSchema>, players: MapSchema<PlayerSchema>) {
     structures.forEach((s) => {
       const def = STRUCTURE_DEFS[s.type as StructureType];
-      if (!def?.healPerTick) return;
+      if (!def || (!def.healPerTick && !def.energyPerTick)) return;
       players.forEach((p) => {
         if (!p.isAlive) return;
         if (distance(p.x, p.y, s.x, s.y) <= def.radius) {
-          p.hp = clamp(p.hp + def.healPerTick!, 0, p.maxHp);
+          if (def.healPerTick) p.hp = clamp(p.hp + def.healPerTick, 0, p.maxHp);
+          if (def.energyPerTick) p.energy = clamp(p.energy + def.energyPerTick, 0, p.maxEnergy);
         }
       });
     });
   }
+}
+
+/** True if a circle at (x,y) collides with a blocking structure (walls). */
+export function blockedByStructure(
+  x: number,
+  y: number,
+  radius: number,
+  structures: MapSchema<StructureSchema>
+): boolean {
+  let blocked = false;
+  structures.forEach((s) => {
+    if (blocked) return;
+    const def = STRUCTURE_DEFS[s.type as StructureType];
+    if (!def?.blocks) return;
+    const rr = def.radius + radius;
+    const dx = x - s.x;
+    const dy = y - s.y;
+    if (dx * dx + dy * dy < rr * rr) blocked = true;
+  });
+  return blocked;
 }

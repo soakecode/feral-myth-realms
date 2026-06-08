@@ -236,7 +236,14 @@ export const ENEMY_SPAWNS: EnemySpawnPoint[] = buildEnemySpawns();
 
 // ---- Structures (buildable) ----------------------------------------------
 
-export type StructureType = 'campfire' | 'totem' | 'ward' | 'bridge';
+export type StructureType =
+  | 'campfire'
+  | 'totem'
+  | 'ward'
+  | 'bridge'
+  | 'wall'
+  | 'barracks'
+  | 'shelter';
 
 export interface StructureDef {
   type: StructureType;
@@ -246,8 +253,11 @@ export interface StructureDef {
   color: number;
   cost: Partial<Record<ResourceType, number>>;
   radius: number; // footprint / effect radius
-  healPerTick?: number; // campfire
+  healPerTick?: number; // campfire / shelter
+  energyPerTick?: number; // barracks (training stamina)
   revealRadius?: number; // totem
+  blocks?: boolean; // wall — stops enemies
+  respawn?: boolean; // shelter — forward respawn point
   xp: number;
 }
 
@@ -267,6 +277,18 @@ export const STRUCTURE_DEFS: Record<StructureType, StructureDef> = {
   bridge: {
     type: 'bridge', name: 'Puente', desc: 'Cruza el agua (próxima fase).', icon: '🌉', color: 0x9a6a3a,
     cost: { wood: 2, stone: 2 }, radius: 80, xp: 10,
+  },
+  wall: {
+    type: 'wall', name: 'Muro', desc: 'Barrera defensiva: frena a las criaturas.', icon: '🧱', color: 0x9a8b73,
+    cost: { stone: 3 }, radius: 46, blocks: true, xp: 8,
+  },
+  barracks: {
+    type: 'barracks', name: 'Campamento de entrenamiento', desc: 'Restaura energía a los aliados cercanos.', icon: '🏕️', color: 0xc06a2a,
+    cost: { wood: 4, stone: 2 }, radius: 220, energyPerTick: 0.7, xp: 20,
+  },
+  shelter: {
+    type: 'shelter', name: 'Refugio', desc: 'Cura y reaparición avanzada para el reino.', icon: '🏠', color: 0x6fa8dc,
+    cost: { wood: 4, essence: 2 }, radius: 240, healPerTick: 0.5, respawn: true, xp: 25,
   },
 };
 
