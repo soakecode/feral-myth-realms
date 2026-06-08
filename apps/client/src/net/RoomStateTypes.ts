@@ -60,6 +60,19 @@ export interface StructureState {
   createdAt: number;
 }
 
+export interface UnitState {
+  id: string;
+  kind: string;
+  ownerId: string;
+  homeId: string;
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
+  isAlive: boolean;
+  animState: string;
+}
+
 export interface EnemyState {
   id: string;
   type: string;
@@ -112,6 +125,12 @@ export interface RealmRoomState {
     onRemove: (cb: (s: StructureState, key: string) => void) => void;
     get: (key: string) => StructureState | undefined;
     forEach: (cb: (s: StructureState, key: string) => void) => void;
+  };
+  units: Map<string, UnitState> & {
+    onAdd: (cb: (unit: UnitState, key: string) => void) => void;
+    onRemove: (cb: (unit: UnitState, key: string) => void) => void;
+    get: (key: string) => UnitState | undefined;
+    forEach: (cb: (unit: UnitState, key: string) => void) => void;
   };
   elapsedMs: number;
   matchActive: boolean;

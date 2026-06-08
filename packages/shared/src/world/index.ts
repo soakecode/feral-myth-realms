@@ -279,8 +279,8 @@ export const STRUCTURE_DEFS: Record<StructureType, StructureDef> = {
     cost: { wood: 2, stone: 2 }, radius: 80, xp: 10,
   },
   wall: {
-    type: 'wall', name: 'Muro', desc: 'Barrera defensiva: frena a las criaturas.', icon: '🧱', color: 0x9a8b73,
-    cost: { stone: 3 }, radius: 46, blocks: true, xp: 8,
+    type: 'wall', name: 'Muro', desc: 'Barrera defensiva: arrastra para alzar una muralla mientras tengas piedra.', icon: '🧱', color: 0x9a8b73,
+    cost: { stone: 1 }, radius: 46, blocks: true, xp: 4,
   },
   barracks: {
     type: 'barracks', name: 'Campamento de entrenamiento', desc: 'Restaura energía a los aliados cercanos.', icon: '🏕️', color: 0xc06a2a,

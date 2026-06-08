@@ -6,6 +6,7 @@ import { EnemyAI } from '../systems/EnemyAI.js';
 import { CombatSystem } from '../systems/CombatSystem.js';
 import { initSanctuaries, tickSanctuaries } from '../systems/SanctuarySystem.js';
 import { WorldSystem } from '../systems/WorldSystem.js';
+import { UnitSystem } from '../systems/UnitSystem.js';
 import { validateSupabaseToken } from '../auth/validateToken.js';
 import { persistMatchResult, incrementPlayerStats, updateCharacterXp } from '../db/supabase.js';
 import {
@@ -36,6 +37,7 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
   private enemyAI = new EnemyAI();
   private combat = new CombatSystem();
   private world = new WorldSystem();
+  private units = new UnitSystem();
   private xpAccumulated: Map<string, number> = new Map();
   private playerUserIds: Map<string, string | null> = new Map();
   private harvestCd: Map<string, number> = new Map();
@@ -255,6 +257,16 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
     const enemyDamage = this.enemyAI.tick(this.state.enemies, this.state.players, deltaMs, now, this.state.structures);
     enemyDamage.forEach((ev) => {
       this.broadcast(MSG.DAMAGE_EVENT, { targetId: ev.targetId, sourceId: ev.sourceId, amount: ev.amount, isPlayer: true });
+    });
+
+    // Friendly unit AI: barracks train soldiers that defend the realm.
+    const unitDamage = this.units.tick(this.state.units, this.state.structures, this.state.enemies, deltaMs, now);
+    unitDamage.forEach((ev) => {
+      this.broadcast(MSG.DAMAGE_EVENT, { targetId: ev.enemyId, sourceId: ev.ownerId, amount: ev.amount, isPlayer: false });
+      if (ev.killed) {
+        if (this.state.players.has(ev.ownerId)) this.awardXp(ev.ownerId, XP_PER_ENEMY_KILL[ev.enemyType] ?? 10);
+        this.broadcast(MSG.ENEMY_DIED, { enemyId: ev.enemyId, killerId: ev.ownerId, enemyType: ev.enemyType });
+      }
     });
 
     // Sanctuary tick

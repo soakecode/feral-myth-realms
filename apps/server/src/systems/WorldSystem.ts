@@ -89,8 +89,10 @@ export class WorldSystem {
     const def = STRUCTURE_DEFS[structureType];
     if (!def) return { error: 'Construcción desconocida' };
 
-    // position must be near the player and on buildable ground
-    if (distance(player.x, player.y, x, y) > BUILD_RANGE) return { error: 'Demasiado lejos' };
+    // position must be near the player and on buildable ground (walls reach
+    // farther so you can lay a defensive line in one drag).
+    const range = structureType === 'wall' ? 760 : BUILD_RANGE;
+    if (distance(player.x, player.y, x, y) > range) return { error: 'Demasiado lejos' };
     if (isBlocked(x, y, 24)) return { error: 'No se puede construir aquí' };
 
     // not too close to an existing structure (walls may sit closer to form lines)

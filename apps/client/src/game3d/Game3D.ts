@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { getStateCallbacks } from '@colyseus/sdk';
 import type { Room } from '@colyseus/sdk';
 import {
@@ -49,7 +50,7 @@ interface Entity {
   group: THREE.Group;
   target: THREE.Vector3;
   faceTarget: number;
-  kind: 'player' | 'enemy';
+  kind: 'player' | 'enemy' | 'unit';
   type?: string;
   name?: string;
   bob?: number;
@@ -77,9 +78,11 @@ export class Game3D {
   private fireflyAnim: { base: Float32Array; phase: Float32Array } | null = null;
   private waterMeshes: THREE.Mesh[] = [];
   private foliage: { mesh: THREE.Object3D; sway: number; phase: number }[] = [];
+  private braziers: { light: THREE.PointLight; flame: THREE.Mesh; base: number; phase: number }[] = [];
 
   private players = new Map<string, Entity>();
   private enemies = new Map<string, Entity>();
+  private units = new Map<string, Entity>();
   private sanctuaries = new Map<string, { group: THREE.Group; pillar: THREE.Mesh }>();
   private resourceMeshes = new Map<string, THREE.Group>();
   private structureMeshes = new Map<string, THREE.Group>();
@@ -101,6 +104,7 @@ export class Game3D {
   private moveTarget: THREE.Vector3 | null = null;
   private moveMarker: THREE.Mesh | null = null;
   private cameraMode: 'iso' | 'third' = 'iso';
+  private wallDragStart: THREE.Vector3 | null = null;
 
   // world interaction
   private nearestNodeId: string | null = null;
@@ -109,6 +113,7 @@ export class Game3D {
   private buildGhost: THREE.Mesh | null = null;
   private currentZone = 'sanctum';
   private objectives: Objective[] = [];
+  private objectiveTier = 0;
   private toast = '';
   private toastUntil = 0;
 
@@ -149,15 +154,15 @@ export class Game3D {
     this.renderer.shadowMap.type = this.quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.18;
+    this.renderer.toneMappingExposure = this.quality === 'high' ? 0.92 : 1.06;
     const canvas = this.renderer.domElement;
     canvas.id = 'game3d-canvas';
     canvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;touch-action:none;';
     document.getElementById('game-container')!.appendChild(canvas);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x141d2b);
-    this.scene.fog = new THREE.FogExp2(0x16212e, 0.00046);
+    this.scene.background = new THREE.Color(0x080b10);
+    this.scene.fog = new THREE.FogExp2(0x0a0e14, 0.00082);
 
     this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 9000);
 
@@ -184,10 +189,11 @@ export class Game3D {
     // Gradient dusk sky dome
     this.scene.add(this.makeSky());
 
-    // Lighting: cool sky fill + warm key sun (shadows) + cold rim for separation
-    this.scene.add(new THREE.HemisphereLight(0xbcd4ff, 0x4a4231, 0.7));
-    this.scene.add(new THREE.AmbientLight(0x35506a, 0.36));
-    const sun = new THREE.DirectionalLight(0xffe4b2, 2.55);
+    // Diablo-like mood: dim cold moonlight + deep shadow, very low ambient for
+    // high contrast. The warmth + readable pools of light come from braziers.
+    this.scene.add(new THREE.HemisphereLight(0x556c8a, 0x130e09, 0.32));
+    this.scene.add(new THREE.AmbientLight(0x1a2130, 0.13));
+    const sun = new THREE.DirectionalLight(0xaab7d4, 1.3);
     sun.position.set(WORLD.width * 0.34, 2500, WORLD.height * 0.04);
     sun.castShadow = true;
     sun.shadow.mapSize.set(hi ? 2048 : 1024, hi ? 2048 : 1024);
@@ -198,11 +204,14 @@ export class Game3D {
     const s = 1500; scam.left = -s; scam.right = s; scam.top = s; scam.bottom = -s; scam.updateProjectionMatrix();
     sun.target.position.set(WORLD.sanctum.x, 0, WORLD.sanctum.y);
     this.scene.add(sun, sun.target);
-    const rim = new THREE.DirectionalLight(0x6f8cff, 0.7);
+    const rim = new THREE.DirectionalLight(0x3a4c6b, 0.38);
     rim.position.set(-WORLD.width * 0.2, 1500, WORLD.height * 1.15);
     this.scene.add(rim);
 
-    // Biome ground — gently undulating terrain per quadrant
+    // Biome ground — undulating terrain with a procedural stone/dirt texture,
+    // darkened per biome for the gothic palette.
+    const groundTex = this.makeGroundTexture();
+    if (groundTex) { groundTex.wrapS = groundTex.wrapT = THREE.RepeatWrapping; groundTex.repeat.set(2000 / 230, 1500 / 230); }
     for (const z of ZONES) {
       const geo = new THREE.PlaneGeometry(z.w, z.h, hi ? 40 : 12, hi ? 30 : 9);
       const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -211,7 +220,8 @@ export class Game3D {
         pos.setZ(i, Math.sin(x * 0.0042 + 1.3) * Math.cos(y * 0.0051) * 7 + Math.sin((x + y) * 0.0026) * 5);
       }
       geo.computeVertexNormals();
-      const g = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: z.color, roughness: 0.98 }));
+      const col = new THREE.Color(z.color).lerp(new THREE.Color(0x0d0b09), 0.46);
+      const g = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: col, roughness: 1, map: groundTex ?? null }));
       g.rotation.x = -Math.PI / 2;
       g.position.set(z.x + z.w / 2, 0, z.y + z.h / 2);
       g.receiveShadow = true;
@@ -253,7 +263,65 @@ export class Game3D {
 
     // Purely cosmetic dressing
     if (hi) { this.scatterGrass(); this.scatterCrystals(); }
+    this.addBraziers();
     this.buildAtmosphere();
+  }
+
+  private makeGroundTexture(): THREE.CanvasTexture | null {
+    const c = document.createElement('canvas'); c.width = c.height = 256;
+    const ctx = c.getContext('2d'); if (!ctx) return null;
+    ctx.fillStyle = '#9a948c'; ctx.fillRect(0, 0, 256, 256);
+    // mottled speckle noise
+    for (let i = 0; i < 3000; i++) {
+      const v = 70 + Math.floor(Math.random() * 120);
+      ctx.fillStyle = `rgba(${v},${v - 6},${v - 12},0.5)`;
+      const s = 1 + Math.random() * 3;
+      ctx.fillRect(Math.random() * 256, Math.random() * 256, s, s);
+    }
+    // cobble grout (offset rows)
+    ctx.strokeStyle = 'rgba(22,18,15,0.6)'; ctx.lineWidth = 2.4;
+    const cell = 64;
+    for (let gy = 0; gy <= 256; gy += cell) {
+      const off = ((gy / cell) % 2) ? cell / 2 : 0;
+      for (let gx = -cell; gx <= 256; gx += cell) ctx.strokeRect(gx + off, gy, cell, cell);
+    }
+    // cracks
+    ctx.strokeStyle = 'rgba(8,6,4,0.55)'; ctx.lineWidth = 1.4;
+    for (let i = 0; i < 16; i++) {
+      ctx.beginPath();
+      let x = Math.random() * 256, y = Math.random() * 256; ctx.moveTo(x, y);
+      for (let j = 0; j < 5; j++) { x += (Math.random() - 0.5) * 46; y += (Math.random() - 0.5) * 46; ctx.lineTo(x, y); }
+      ctx.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = this.quality === 'high' ? 4 : 1;
+    return tex;
+  }
+
+  private addBraziers() {
+    const place = (x: number, z: number, scale = 1) => {
+      const g = new THREE.Group();
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(3 * scale, 5 * scale, 34 * scale, 6), new THREE.MeshStandardMaterial({ color: 0x2a2622, roughness: 1, flatShading: true }));
+      post.position.y = 17 * scale; post.castShadow = true; g.add(post);
+      const bowl = new THREE.Mesh(new THREE.CylinderGeometry(9 * scale, 5 * scale, 8 * scale, 8), new THREE.MeshStandardMaterial({ color: 0x39322c, roughness: 1, flatShading: true }));
+      bowl.position.y = 36 * scale; g.add(bowl);
+      const flame = new THREE.Mesh(new THREE.ConeGeometry(6 * scale, 18 * scale, 7), new THREE.MeshBasicMaterial({ color: 0xff8a2a, transparent: true, opacity: 0.95 }));
+      flame.position.y = 47 * scale; g.add(flame);
+      const light = new THREE.PointLight(0xff7e2c, 2.3, 380 * scale, 1.7); light.position.set(0, 48 * scale, 0); g.add(light);
+      g.position.set(x, 0, z); this.scene.add(g);
+      this.braziers.push({ light, flame, base: 2.3, phase: Math.random() * Math.PI * 2 });
+    };
+    const n = 8;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      place(WORLD.sanctum.x + Math.cos(a) * (WORLD.sanctum.r - 26), WORLD.sanctum.y + Math.sin(a) * (WORLD.sanctum.r - 26));
+    }
+    if (this.quality === 'high') {
+      for (const o of OBSTACLES) {
+        if (o.kind === 'ruin' && Math.random() > 0.72) place(o.x + 34, o.y + 30, 0.9);
+      }
+    }
   }
 
   private setupPostProcessing() {
@@ -266,6 +334,12 @@ export class Game3D {
       );
       composer.addPass(bloom);
       composer.addPass(new OutputPass());
+      // Gothic vignette — darkens the corners for an ARPG mood.
+      composer.addPass(new ShaderPass({
+        uniforms: { tDiffuse: { value: null }, strength: { value: 1.4 } },
+        vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+        fragmentShader: 'uniform sampler2D tDiffuse; uniform float strength; varying vec2 vUv; void main(){ vec4 c=texture2D(tDiffuse,vUv); vec2 d=vUv-0.5; float v=clamp(1.0-dot(d,d)*strength,0.0,1.0); v=pow(v,1.3); gl_FragColor=vec4(c.rgb*mix(0.42,1.0,v),c.a); }',
+      }));
       composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       composer.setSize(window.innerWidth, window.innerHeight);
       this.composer = composer;
@@ -641,6 +715,36 @@ export class Game3D {
     return g;
   }
 
+  private createUnitMesh(ownerIsLocal: boolean): THREE.Group {
+    const g = new THREE.Group();
+    const clothColor = ownerIsLocal ? 0xd6b36a : 0x8fa8c8;
+    const cloth = new THREE.MeshStandardMaterial({ color: clothColor, roughness: 0.8, flatShading: true });
+    const leather = new THREE.MeshStandardMaterial({ color: 0x3b2b1d, roughness: 0.92, flatShading: true });
+    const metal = new THREE.MeshStandardMaterial({ color: 0xb8b2a0, roughness: 0.45, metalness: 0.35, flatShading: true });
+
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(7, 16, 4, 10), cloth);
+    body.position.y = 20; body.castShadow = true;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(6, 12, 8), leather);
+    head.position.y = 38; head.castShadow = true;
+    const helm = new THREE.Mesh(new THREE.CylinderGeometry(6.6, 5.2, 5, 8), metal);
+    helm.position.y = 43; helm.castShadow = true;
+    const spear = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.6, 44, 6), metal);
+    spear.position.set(10, 28, 4); spear.rotation.z = -0.28; spear.castShadow = true;
+    const shield = new THREE.Mesh(new THREE.CylinderGeometry(6.5, 6.5, 2.5, 6), metal);
+    shield.position.set(-9, 25, 7); shield.rotation.x = Math.PI / 2; shield.castShadow = true;
+    const banner = new THREE.Mesh(new THREE.PlaneGeometry(10, 8), new THREE.MeshBasicMaterial({ color: clothColor, side: THREE.DoubleSide }));
+    banner.position.set(12, 47, 1);
+
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(11, 14, 20),
+      new THREE.MeshBasicMaterial({ color: clothColor, transparent: true, opacity: 0.52, side: THREE.DoubleSide })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 1;
+    g.add(body, head, helm, spear, shield, banner, ring);
+    return g;
+  }
+
   private createResourceMesh(type: ResourceType): THREE.Group {
     const info = RESOURCE_INFO[type];
     const g = new THREE.Group();
@@ -916,6 +1020,35 @@ export class Game3D {
       $(state).structures.onAdd(addStructure);
       $(state).structures.onRemove(removeStructure);
       state.structures?.forEach(addStructure);
+
+      const addUnit = (u: RealmRoomState['units'] extends Map<string, infer U> ? U : never, id: string) => {
+        if (this.units.has(id)) return;
+        const group = this.createUnitMesh(u.ownerId === this.localId);
+        group.position.set(u.x, 0, u.y);
+        group.visible = u.isAlive;
+        const label = this.makeLabel();
+        label.sprite.position.set(0, 54, 0);
+        group.add(label.sprite);
+        this.scene.add(group);
+        this.units.set(id, {
+          group,
+          target: new THREE.Vector3(u.x, 0, u.y),
+          faceTarget: 0,
+          kind: 'unit',
+          name: 'Guardia',
+          label,
+          lastPos: new THREE.Vector3(u.x, 0, u.y),
+        });
+      };
+      const removeUnit = (_u: unknown, id: string) => {
+        const unit = this.units.get(id);
+        if (unit) { this.scene.remove(unit.group); disposeGroup(unit.group); this.units.delete(id); }
+      };
+      if (state.units) {
+        $(state).units.onAdd(addUnit);
+        $(state).units.onRemove(removeUnit);
+        state.units.forEach(addUnit);
+      }
     }
 
     this.room.onMessage(MSG.PLAYER_JOINED, (d: { playerId: string; roomCode?: string }) => {
@@ -934,12 +1067,13 @@ export class Game3D {
     });
     this.room.onMessage(MSG.STRUCTURE_BUILT, (d: { type: StructureType; ownerId: string }) => {
       if (d.ownerId === this.localId) {
-        if (d.type === 'campfire') this.progressObjective('build');
-        this.showToast(`${STRUCTURE_DEFS[d.type].icon} ${STRUCTURE_DEFS[d.type].name} construido`);
+        this.progressObjective('build');
+        // walls fire many builds at once — don't spam a toast per segment
+        if (d.type !== 'wall') this.showToast(`${STRUCTURE_DEFS[d.type].icon} ${STRUCTURE_DEFS[d.type].name} construido`);
       }
     });
     this.room.onMessage(MSG.BUILD_DENIED, (d: { reason: string }) => this.showToast(`✗ ${d.reason}`));
-    this.room.onMessage(MSG.LEVEL_UP, (d: { level: number }) => this.showToast(`⭐ ¡Nivel ${d.level}!`));
+    this.room.onMessage(MSG.LEVEL_UP, (d: { level: number }) => { this.showToast(`⭐ ¡Nivel ${d.level}!`); this.setObjective('level', d.level); });
     this.room.onMessage(MSG.MATCH_END, () => { /* realm: no end */ });
     this.room.onLeave(() => {
       this.connectionStatus = this.intentionalExit ? 'Saliendo' : 'Desconectado';
@@ -950,13 +1084,37 @@ export class Game3D {
   // ---- objectives -----------------------------------------------------------
 
   private initObjectives() {
-    this.objectives = [
-      { id: 'explore', label: 'Sal del santuario y explora un bioma', goal: 1, progress: 0, done: false },
-      { id: 'gather', label: 'Recolecta 5 recursos', goal: 5, progress: 0, done: false },
-      { id: 'kill', label: 'Derrota 3 criaturas corruptas', goal: 3, progress: 0, done: false },
-      { id: 'build', label: 'Construye una Hoguera 🔥', goal: 1, progress: 0, done: false },
-      { id: 'sanctuary', label: 'Captura un santuario', goal: 1, progress: 0, done: false },
+    this.objectiveTier = 0;
+    this.objectives = this.objectivesForTier(0);
+  }
+
+  private objectivesForTier(tier: number): Objective[] {
+    if (tier === 0) {
+      return [
+        { id: 'explore', label: 'Sal del santuario y explora un bioma', goal: 1, progress: 0, done: false },
+        { id: 'gather', label: 'Recolecta 5 recursos', goal: 5, progress: 0, done: false },
+        { id: 'kill', label: 'Derrota 3 criaturas corruptas', goal: 3, progress: 0, done: false },
+        { id: 'build', label: 'Construye tu primera estructura', goal: 1, progress: 0, done: false },
+        { id: 'sanctuary', label: 'Captura un santuario', goal: 1, progress: 0, done: false },
+      ];
+    }
+    // Escalating campaign: goals grow each tier.
+    const g = (n: number) => Math.round(n * (1 + (tier - 1) * 0.8));
+    return [
+      { id: 'gather', label: `Reúne ${g(15)} recursos para el reino`, goal: g(15), progress: 0, done: false },
+      { id: 'kill', label: `Derrota ${g(10)} criaturas corruptas`, goal: g(10), progress: 0, done: false },
+      { id: 'build', label: `Levanta ${g(3)} construcciones del reino`, goal: g(3), progress: 0, done: false },
+      { id: 'level', label: `Alcanza el nivel ${2 + tier}`, goal: 2 + tier, progress: 0, done: false },
     ];
+  }
+
+  private maybeEscalateObjectives() {
+    if (this.objectives.length > 0 && this.objectives.every((o) => o.done)) {
+      this.objectiveTier += 1;
+      this.objectives = this.objectivesForTier(this.objectiveTier);
+      this.renderObjectives();
+      this.showToast('⚔️ ¡Reino afianzado! Nuevos objetivos, más ambiciosos');
+    }
   }
 
   private progressObjective(id: string, amount = 1) {
@@ -965,6 +1123,16 @@ export class Game3D {
     o.progress = Math.min(o.goal, o.progress + amount);
     if (o.progress >= o.goal) { o.done = true; this.showToast('✓ Objetivo completado'); }
     this.renderObjectives();
+    this.maybeEscalateObjectives();
+  }
+
+  private setObjective(id: string, value: number) {
+    const o = this.objectives.find((x) => x.id === id);
+    if (!o || o.done) return;
+    o.progress = Math.min(o.goal, value);
+    if (o.progress >= o.goal) { o.done = true; this.showToast('✓ Objetivo completado'); }
+    this.renderObjectives();
+    this.maybeEscalateObjectives();
   }
 
   // ---- input ----------------------------------------------------------------
@@ -975,10 +1143,21 @@ export class Game3D {
     canvas.addEventListener('pointermove', (e) => this.updateAim(e));
     canvas.addEventListener('pointerdown', (e) => {
       this.updateAim(e);
-      if (this.buildMode) { if (e.button === 2) this.cancelBuild(); else this.confirmBuild(); return; }
+      if (this.buildMode) {
+        if (e.button === 2) { this.cancelBuild(); return; }
+        if (this.buildMode === 'wall') { this.wallDragStart = this.groundPoint(e); return; }
+        this.confirmBuild();
+        return;
+      }
       // Left/primary click (or tap) sets a move destination; right-click attacks.
       if (e.button === 2) this.queueBasicAttack();
       else this.setMoveTargetFromPointer(e);
+    });
+    canvas.addEventListener('pointerup', (e) => {
+      if (this.buildMode === 'wall' && this.wallDragStart) {
+        this.placeWallLine(this.wallDragStart, this.groundPoint(e) ?? this.wallDragStart);
+        this.wallDragStart = null;
+      }
     });
     const isTouch = window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
     if (isTouch) this.buildTouchControls();
@@ -993,16 +1172,44 @@ export class Game3D {
     this.showToast(this.cameraMode === 'iso' ? 'Vista aérea' : 'Vista en tercera persona');
   }
 
-  private setMoveTargetFromPointer(e: PointerEvent) {
+  private groundPoint(e: PointerEvent): THREE.Vector3 | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
     const hit = new THREE.Vector3();
-    if (!this.raycaster.ray.intersectPlane(this.groundPlane, hit)) return;
+    if (!this.raycaster.ray.intersectPlane(this.groundPlane, hit)) return null;
     hit.x = clamp(hit.x, 30, WORLD.width - 30);
     hit.z = clamp(hit.z, 30, WORLD.height - 30);
+    return hit;
+  }
+
+  private setMoveTargetFromPointer(e: PointerEvent) {
+    const hit = this.groundPoint(e);
+    if (!hit) return;
     this.moveTarget = hit;
     this.spawnMoveMarker(hit);
+  }
+
+  /** Linear wall: lay segments from start→end, capped by the player's stone. */
+  private placeWallLine(start: THREE.Vector3, end: THREE.Vector3) {
+    const state = this.room.state as RealmRoomState;
+    const mine = state.players?.get(this.localId);
+    const stone = mine ? (mine.stone ?? 0) : 0;
+    const cost = STRUCTURE_DEFS.wall.cost.stone ?? 1;
+    const affordable = Math.floor(stone / cost);
+    if (affordable < 1) { this.showToast('✗ Sin piedra para el muro'); this.cancelBuild(); return; }
+    const dx = end.x - start.x, dz = end.z - start.z;
+    const len = Math.hypot(dx, dz);
+    const spacing = 52;
+    let count = Math.max(1, Math.round(len / spacing) + 1);
+    count = Math.min(count, affordable, 16);
+    const ux = len > 0 ? dx / len : 0, uz = len > 0 ? dz / len : 0;
+    for (let i = 0; i < count; i++) {
+      this.room.send(MSG.BUILD, { structureType: 'wall', x: start.x + ux * spacing * i, y: start.z + uz * spacing * i });
+    }
+    this.showToast(`🧱 Alzando muralla (${count} tramos)`);
+    this.cancelBuild();
+    const menu = document.getElementById('build3d'); if (menu) menu.style.display = 'none';
   }
 
   private spawnMoveMarker(p: THREE.Vector3) {
@@ -1134,7 +1341,9 @@ export class Game3D {
       new THREE.MeshBasicMaterial({ color: def.color, transparent: true, opacity: 0.5 })
     );
     this.scene.add(this.buildGhost);
-    this.showToast(`Coloca: ${def.icon} ${def.name} (click para confirmar, Esc cancela)`);
+    this.showToast(type === 'wall'
+      ? '🧱 Arrastra sobre el suelo para alzar la muralla (según tu piedra)'
+      : `Coloca: ${def.icon} ${def.name} (clic para confirmar, clic der./Esc cancela)`);
   }
 
   private cancelBuild() {
@@ -1228,6 +1437,12 @@ export class Game3D {
       attr.needsUpdate = true;
       (this.fireflies.material as THREE.PointsMaterial).opacity = 0.7 + Math.sin(time * 2) * 0.15;
     }
+    for (const b of this.braziers) {
+      const f = 0.78 + Math.sin(time * 11 + b.phase) * 0.13 + Math.sin(time * 23 + b.phase) * 0.06;
+      b.light.intensity = b.base * f;
+      const sc = 0.85 + f * 0.3;
+      b.flame.scale.set(sc, 1 + (f - 0.8) * 1.7, sc);
+    }
     if (this.moveMarker && this.moveMarker.visible) {
       const k = 1 + Math.sin(time * 6) * 0.18;
       this.moveMarker.scale.set(k, k, k);
@@ -1261,6 +1476,16 @@ export class Game3D {
         this.drawLabel(e.label, e.name ?? 'Enemy', clamp(en.hp / en.maxHp, 0, 1), '#ffd2d2');
       }
     });
+    state.units?.forEach((u, id) => {
+      const e = this.units.get(id);
+      if (!e) return;
+      e.target.set(u.x, 0, u.y);
+      e.group.visible = u.isAlive;
+      if (e.label) {
+        e.label.sprite.visible = u.isAlive;
+        this.drawLabel(e.label, e.name ?? 'Guardia', clamp(u.hp / u.maxHp, 0, 1), u.ownerId === this.localId ? '#ffe6a8' : '#b8d7ff');
+      }
+    });
 
     this.players.forEach((e) => {
       e.group.position.lerp(e.target, 1 - Math.pow(0.0001, dt));
@@ -1271,6 +1496,15 @@ export class Game3D {
       e.group.position.lerp(e.target, 1 - Math.pow(0.0006, dt));
       if (e.bob !== undefined) { e.bob += dt * 3; e.group.position.y = e.type === 'wisp' ? Math.sin(e.bob) * 6 + 4 : Math.sin(e.bob) * 2; }
       e.group.rotation.y += dt * (e.type === 'rune_imp' ? 1.4 : 0.5);
+    });
+    this.units.forEach((e) => {
+      const old = e.group.position.clone();
+      e.group.position.lerp(e.target, 1 - Math.pow(0.0008, dt));
+      const dx = e.group.position.x - old.x;
+      const dz = e.group.position.z - old.z;
+      if (Math.hypot(dx, dz) > 0.02) e.faceTarget = Math.atan2(dx, dz);
+      e.group.rotation.y = lerpAngle(e.group.rotation.y, e.faceTarget, 1 - Math.pow(0.001, dt));
+      e.group.position.y = Math.sin(time * 7 + e.group.position.x * 0.02) * 1.2;
     });
     this.sanctuaries.forEach((s) => { s.pillar.rotation.y += dt; const k = 1 + Math.sin(this.clock.elapsedTime * 2) * 0.06; s.pillar.scale.set(k, 1, k); });
     this.resourceMeshes.forEach((g) => { g.rotation.y += dt * 0.8; });
@@ -1609,6 +1843,7 @@ export class Game3D {
     state.resources?.forEach((n) => { if (n.available) dot(n.x, n.y, '#7fe3c0', 1.3); });
     state.structures?.forEach((s) => dot(s.x, s.y, '#ff9a3c', 2));
     state.enemies?.forEach((e) => { if (e.isAlive) dot(e.x, e.y, '#ff5a5a', 1.5); });
+    state.units?.forEach((u) => { if (u.isAlive) dot(u.x, u.y, u.ownerId === this.localId ? '#ffd76a' : '#9fc4ff', 1.8); });
     state.players?.forEach((p, id) => dot(p.x, p.y, id === this.localId ? '#ffffff' : '#7fb0ff', id === this.localId ? 3 : 2));
   }
 
@@ -1687,6 +1922,7 @@ export class Game3D {
     window.removeEventListener('popstate', this.onPopState);
     this.players.forEach((e) => disposeGroup(e.group));
     this.enemies.forEach((e) => disposeGroup(e.group));
+    this.units.forEach((e) => disposeGroup(e.group));
     this.sanctuaries.forEach((s) => disposeGroup(s.group));
     this.resourceMeshes.forEach((g) => disposeGroup(g));
     this.structureMeshes.forEach((g) => disposeGroup(g));
