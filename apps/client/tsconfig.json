@@ -7,7 +7,7 @@
     "rootDir": "./src",
     "composite": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"]
+    "types": ["vite/client", "vite-plugin-pwa/client"]
   },
   "include": ["src/**/*"],
   "references": [

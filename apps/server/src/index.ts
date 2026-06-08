@@ -18,10 +18,13 @@ const gameServer = new Server({
     const isAllowedOrigin = (origin?: string): boolean => {
       if (!origin) return true; // non-browser clients (no Origin header)
       if (origin === env.CLIENT_ORIGIN) return true;
+      if (env.ALLOWED_ORIGINS.includes(origin)) return true;
       try {
         const host = new URL(origin).hostname;
         if (host === 'localhost' || host === '127.0.0.1') return true;
         if (host === 'feral-myth-realms.pages.dev' || host.endsWith('.feral-myth-realms.pages.dev')) return true;
+        if (host.endsWith('.pages.dev')) return true;
+        if (host.endsWith('.onrender.com')) return true;
       } catch {
         /* malformed origin */
       }

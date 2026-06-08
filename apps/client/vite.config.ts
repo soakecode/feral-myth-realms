@@ -13,8 +13,12 @@ export default defineConfig({
         description: 'Multiplayer tactical action RPG set in a mythical archipelago',
         theme_color: '#1a1a2e',
         background_color: '#1a1a2e',
+        id: '/',
+        start_url: '/',
+        scope: '/',
         display: 'standalone',
-        orientation: 'landscape',
+        display_override: ['standalone', 'fullscreen', 'minimal-ui', 'browser'],
+        orientation: 'any',
         icons: [
           {
             src: 'icons/icon-192.png',

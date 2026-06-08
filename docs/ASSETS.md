@@ -40,3 +40,25 @@ Los styleboards están **excluidos del precache** del service worker
 - No hay sprites/atlas técnicos ni modelos GLTF todavía; el render 3D usa geometría
   procedural low-poly inspirada en estas paletas.
 - Integrar los styleboards como fondos in-game y un Bestiario queda como siguiente fase.
+
+## Estado tras la integracion visual
+
+- `MainMenuScene` usa `realms-biomes.png` como fondo principal animado.
+- `ClassSelectScene` usa `characters-classes.png` como recorte visual por clase
+  mediante CSS (`background-position` por carta). No es un sprite recortado: es
+  un uso controlado de la lamina completa.
+- `LobbyScene` usa `realms-biomes.png` como fondo y `characters-classes.png` como
+  retrato circular de la clase seleccionada.
+- `Game3D` sigue usando geometria procedural, pero ahora los jugadores, enemigos
+  y recursos incorporan siluetas, colores y marcadores inspirados en las laminas:
+  astas/baculo del ciervo, alas/orbe del cuervo, escudo/espada del lobo, cola/dagas
+  del zorro, enemigos mas diferenciados y recursos con etiqueta flotante.
+
+## Para llegar a arte de produccion
+
+Estas laminas son buenas como direccion visual, pero no sustituyen a un paquete de
+assets tecnico. Para animacion y render de mayor calidad haria falta producir:
+spritesheets con celdas regulares, atlas TexturePacker/Aseprite, o modelos GLTF/VRM
+con animaciones. El siguiente paso razonable es separar assets en `characters`,
+`enemies`, `resources`, `terrain` y `ui` en lugar de seguir recortando laminas
+conceptuales completas.

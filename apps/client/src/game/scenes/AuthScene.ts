@@ -10,6 +10,7 @@ import { sanitizeAlias } from '@fmr/shared';
 
 export class AuthScene extends Phaser.Scene {
   private authMode: 'guest' | 'login' | 'register' = 'guest';
+  private onPopState = () => this.scene.start('MainMenuScene');
 
   constructor() {
     super({ key: 'AuthScene' });
@@ -22,6 +23,7 @@ export class AuthScene extends Phaser.Scene {
   async create() {
     const overlay = document.getElementById('ui-overlay')!;
     overlay.innerHTML = '';
+    this.pushNavigationState();
 
     // Check existing session
     if (this.authMode !== 'guest') {
@@ -33,6 +35,15 @@ export class AuthScene extends Phaser.Scene {
     }
 
     this.renderForm(overlay);
+  }
+
+  private pushNavigationState() {
+    try {
+      window.history.pushState({ fmrScene: 'auth' }, '', window.location.href);
+    } catch {
+      // Embedded browsers can block history updates.
+    }
+    window.addEventListener('popstate', this.onPopState);
   }
 
   private renderForm(overlay: HTMLElement) {
@@ -239,6 +250,7 @@ export class AuthScene extends Phaser.Scene {
   }
 
   shutdown() {
+    window.removeEventListener('popstate', this.onPopState);
     document.getElementById('ui-overlay')!.innerHTML = '';
   }
 }
