@@ -49,8 +49,11 @@ export class LoadingScene extends Phaser.Scene {
   }
 
   create() {
-    this.time.delayedCall(300, () => {
-      this.scene.start('MainMenuScene');
-    });
+    // window.setTimeout instead of Phaser's delayedCall: the Phaser clock runs
+    // on requestAnimationFrame, which browsers freeze in hidden/background
+    // tabs — the game would sit on "Cargando..." forever if opened in one.
+    window.setTimeout(() => {
+      if (this.scene.isActive('LoadingScene')) this.scene.start('MainMenuScene');
+    }, 300);
   }
 }

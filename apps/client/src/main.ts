@@ -41,7 +41,11 @@ const config: Phaser.Types.Core.GameConfig = {
   },
   fps: {
     target: 60,
-    forceSetTimeOut: false,
+    // setTimeout loop instead of rAF: browsers freeze rAF entirely in hidden
+    // tabs, which froze scene transitions (stuck on "Cargando..."), and an
+    // online world shouldn't halt in the background. Hidden-tab timers still
+    // tick (~1fps) — enough to keep scenes and the session alive.
+    forceSetTimeOut: true,
   },
   physics: {
     default: 'arcade',

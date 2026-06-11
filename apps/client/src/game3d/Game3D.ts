@@ -105,8 +105,24 @@ export class Game3D {
   // click / tap-to-move
   private moveTarget: THREE.Vector3 | null = null;
   private moveMarker: THREE.Mesh | null = null;
-  private cameraMode: 'iso' | 'third' = 'iso';
+  private cameraMode: 'iso' | 'third' | 'first' = 'iso';
   private wallDragStart: THREE.Vector3 | null = null;
+  // first-person state
+  private yaw = 0;
+  private pitch = -0.1;
+  private fpWeapon: THREE.Group | null = null;
+  private fpSwing = 0;
+  private fpBob = 0;
+  private lookId: number | null = null;
+  private lookLast = { x: 0, y: 0 };
+  private lookMoved = 0;
+  private lookStart = 0;
+  private onLockChange = () => this.handleLockChange();
+  private onMouseLook = (e: MouseEvent) => {
+    if (this.cameraMode !== 'first' || document.pointerLockElement !== this.renderer.domElement) return;
+    this.yaw -= e.movementX * 0.0026;
+    this.pitch = clamp(this.pitch - e.movementY * 0.0022, -1.15, 1.05);
+  };
   /** Diablo-style command: walk to the clicked enemy/resource, then act. */
   private pendingAction: { kind: 'attack' | 'harvest'; id: string } | null = null;
 
@@ -175,6 +191,9 @@ export class Game3D {
     this.scene.fog = new THREE.FogExp2(0x24364c, 0.00036);
 
     this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 9000);
+    // The camera lives in the scene graph so the first-person weapon (a camera
+    // child) gets rendered and lit.
+    this.scene.add(this.camera);
 
     this.buildWorld();
     this.setupPostProcessing();
@@ -187,6 +206,8 @@ export class Game3D {
     window.addEventListener('resize', this.onResize);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
+    document.addEventListener('pointerlockchange', this.onLockChange);
+    document.addEventListener('mousemove', this.onMouseLook);
 
     this.loop();
   }
@@ -236,6 +257,8 @@ export class Game3D {
         roughness: 0.92,
         metalness: 0.02,
         map: groundTex ?? null,
+        bumpMap: groundTex ?? null,
+        bumpScale: 0.9,
         emissive: new THREE.Color(z.accent).multiplyScalar(0.08),
         emissiveIntensity: 0.08,
       }));
@@ -259,7 +282,7 @@ export class Game3D {
     ring.rotation.x = -Math.PI / 2; ring.position.set(WORLD.sanctum.x, 2, WORLD.sanctum.y); this.scene.add(ring);
 
     // Border cliffs (dark, framing the playfield)
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x202a3a, roughness: 1, flatShading: true });
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x202a3a, roughness: 1, map: this.getStoneTexture() });
     const wall = (w: number, d: number, x: number, z: number) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, 130, d), wallMat);
       m.position.set(x, 35, z); m.receiveShadow = true; this.scene.add(m);
@@ -349,9 +372,9 @@ export class Game3D {
   private addBraziers() {
     const place = (x: number, z: number, scale = 1) => {
       const g = new THREE.Group();
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(3 * scale, 5 * scale, 34 * scale, 6), new THREE.MeshStandardMaterial({ color: 0x2a2622, roughness: 1, flatShading: true }));
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(3 * scale, 5 * scale, 34 * scale, 6), new THREE.MeshStandardMaterial({ color: 0x2a2622, roughness: 1 }));
       post.position.y = 17 * scale; post.castShadow = true; g.add(post);
-      const bowl = new THREE.Mesh(new THREE.CylinderGeometry(9 * scale, 5 * scale, 8 * scale, 8), new THREE.MeshStandardMaterial({ color: 0x39322c, roughness: 1, flatShading: true }));
+      const bowl = new THREE.Mesh(new THREE.CylinderGeometry(9 * scale, 5 * scale, 8 * scale, 8), new THREE.MeshStandardMaterial({ color: 0x39322c, roughness: 1 }));
       bowl.position.y = 36 * scale; g.add(bowl);
       const flame = new THREE.Mesh(new THREE.ConeGeometry(6 * scale, 18 * scale, 7), new THREE.MeshBasicMaterial({ color: 0xff8a2a, transparent: true, opacity: 0.95 }));
       flame.position.y = 47 * scale; g.add(flame);
@@ -399,40 +422,139 @@ export class Game3D {
   // ---- world helpers --------------------------------------------------------
 
   private makeSky(): THREE.Mesh {
-    const c = document.createElement('canvas'); c.width = 16; c.height = 256;
+    // Real night sky for first person: dusk gradient + starfield + glowing moon.
+    const c = document.createElement('canvas'); c.width = 1024; c.height = 512;
     const ctx = c.getContext('2d')!;
-    const grad = ctx.createLinearGradient(0, 0, 0, 256);
+    const grad = ctx.createLinearGradient(0, 0, 0, 512);
     grad.addColorStop(0.0, '#132a4f');   // moonlit zenith
     grad.addColorStop(0.34, '#315070');
     grad.addColorStop(0.5, '#b39268');   // warm horizon haze
     grad.addColorStop(0.66, '#547080');
     grad.addColorStop(1.0, '#293747');   // nadir
-    ctx.fillStyle = grad; ctx.fillRect(0, 0, 16, 256);
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, 1024, 512);
+    // stars on the upper hemisphere, denser near the zenith
+    for (let i = 0; i < 420; i++) {
+      const y = Math.pow(Math.random(), 1.7) * 230;
+      const x = Math.random() * 1024;
+      const r = Math.random() * 1.1 + 0.3;
+      const a = 0.25 + Math.random() * 0.65;
+      ctx.fillStyle = `rgba(${220 + Math.floor(Math.random() * 35)},${225 + Math.floor(Math.random() * 30)},255,${a})`;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+    }
+    // moon with halo and craters
+    const mx = 700, my = 96;
+    const halo = ctx.createRadialGradient(mx, my, 6, mx, my, 70);
+    halo.addColorStop(0, 'rgba(220,228,255,0.55)');
+    halo.addColorStop(0.35, 'rgba(190,205,245,0.16)');
+    halo.addColorStop(1, 'rgba(180,200,240,0)');
+    ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(mx, my, 70, 0, 7); ctx.fill();
+    ctx.fillStyle = '#e8edfb'; ctx.beginPath(); ctx.arc(mx, my, 17, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(170,182,210,0.5)';
+    for (const [ox, oy, r] of [[-5, -3, 4], [6, 4, 3], [2, -7, 2.4]]) {
+      ctx.beginPath(); ctx.arc(mx + ox, my + oy, r, 0, 7); ctx.fill();
+    }
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
     const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, depthWrite: false });
-    const sky = new THREE.Mesh(new THREE.SphereGeometry(5200, 32, 20), mat);
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(5200, 48, 28), mat);
     sky.position.set(WORLD.sanctum.x, 0, WORLD.sanctum.y);
     sky.renderOrder = -1;
     return sky;
   }
 
+  // Neutral-luminance detail textures: the material's color supplies the hue.
+  private texBark: THREE.CanvasTexture | null = null;
+  private texStone: THREE.CanvasTexture | null = null;
+
+  private getBarkTexture(): THREE.CanvasTexture {
+    if (this.texBark) return this.texBark;
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = '#b8b0a6'; ctx.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < 46; i++) {
+      const x = Math.random() * 128;
+      const w = 1 + Math.random() * 3;
+      const v = 60 + Math.floor(Math.random() * 90);
+      ctx.fillStyle = `rgba(${v},${v - 8},${v - 16},0.55)`;
+      ctx.fillRect(x, 0, w, 128);
+    }
+    for (let i = 0; i < 9; i++) { // knots
+      const x = Math.random() * 128, y = Math.random() * 128;
+      ctx.strokeStyle = 'rgba(40,32,24,0.5)'; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.ellipse(x, y, 3 + Math.random() * 4, 6 + Math.random() * 6, 0, 0, 7); ctx.stroke();
+    }
+    this.texBark = new THREE.CanvasTexture(c);
+    this.texBark.colorSpace = THREE.SRGBColorSpace;
+    this.texBark.wrapS = this.texBark.wrapT = THREE.RepeatWrapping;
+    this.texBark.repeat.set(2, 2);
+    return this.texBark;
+  }
+
+  private getStoneTexture(): THREE.CanvasTexture {
+    if (this.texStone) return this.texStone;
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = '#b2b2b2'; ctx.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < 1500; i++) {
+      const v = 110 + Math.floor(Math.random() * 110);
+      ctx.fillStyle = `rgba(${v},${v},${v},0.4)`;
+      ctx.fillRect(Math.random() * 128, Math.random() * 128, 1 + Math.random() * 2, 1 + Math.random() * 2);
+    }
+    ctx.strokeStyle = 'rgba(30,28,26,0.5)'; ctx.lineWidth = 1.1;
+    for (let i = 0; i < 10; i++) {
+      ctx.beginPath();
+      let x = Math.random() * 128, y = Math.random() * 128;
+      ctx.moveTo(x, y);
+      for (let j = 0; j < 4; j++) { x += (Math.random() - 0.5) * 36; y += (Math.random() - 0.5) * 36; ctx.lineTo(x, y); }
+      ctx.stroke();
+    }
+    this.texStone = new THREE.CanvasTexture(c);
+    this.texStone.colorSpace = THREE.SRGBColorSpace;
+    this.texStone.wrapS = this.texStone.wrapT = THREE.RepeatWrapping;
+    return this.texStone;
+  }
+
   private makeTree(x: number, y: number, radius: number, accent: number, hi: boolean): THREE.Group {
+    // Human scale + organic silhouettes: bent smooth trunks with bark relief,
+    // canopies built from noise-displaced ellipsoids (deciduous) or smooth
+    // jittered cones (firs) — no faceted "block" trees.
     const g = new THREE.Group();
+    const bark = this.getBarkTexture();
+    const trunkGeo = jitterGeometry(new THREE.CylinderGeometry(radius * 0.15, radius * 0.34, radius * 2.6, 10, 4), radius * 0.04);
     const trunk = new THREE.Mesh(
-      new THREE.CylinderGeometry(radius * 0.16, radius * 0.3, radius * 1.5, 6),
-      new THREE.MeshStandardMaterial({ color: 0x5b4634, roughness: 1, flatShading: true })
+      trunkGeo,
+      new THREE.MeshStandardMaterial({ color: 0x5b4634, roughness: 1, map: bark, bumpMap: bark, bumpScale: 1.4 })
     );
-    trunk.position.y = radius * 0.75; trunk.castShadow = hi; g.add(trunk);
+    trunk.position.y = radius * 1.3;
+    trunk.rotation.z = (Math.random() - 0.5) * 0.09;
+    trunk.castShadow = hi; g.add(trunk);
+
     const canopy = new THREE.Group();
     const tint = new THREE.Color(accent).offsetHSL(0, -0.12, (Math.random() - 0.5) * 0.1);
-    const leafMat = new THREE.MeshStandardMaterial({ color: tint.offsetHSL(0, 0.02, 0.08), emissive: new THREE.Color(accent).multiplyScalar(0.08), emissiveIntensity: 0.1, roughness: 0.96, flatShading: true });
-    for (let i = 0; i < 3; i++) {
-      const f = 1 - i / 3;
-      const cone = new THREE.Mesh(new THREE.ConeGeometry(radius * (0.7 + f * 0.55), radius * 1.25, 7), leafMat);
-      cone.position.y = radius * (1.4 + i * 0.7);
-      cone.rotation.y = Math.random() * Math.PI;
-      cone.castShadow = hi;
-      canopy.add(cone);
+    const leafMat = new THREE.MeshStandardMaterial({ color: tint.offsetHSL(0, 0.02, 0.08), emissive: new THREE.Color(accent).multiplyScalar(0.08), emissiveIntensity: 0.1, roughness: 0.96 });
+    if (Math.random() < 0.45) {
+      // deciduous: a cluster of irregular leaf masses
+      for (let i = 0; i < 4; i++) {
+        const s = radius * (0.55 + Math.random() * 0.5);
+        const blob = new THREE.Mesh(jitterGeometry(new THREE.SphereGeometry(s, 12, 9), s * 0.16), leafMat);
+        const a = Math.random() * Math.PI * 2;
+        blob.position.set(Math.cos(a) * radius * 0.4, radius * (2.6 + Math.random() * 1.1), Math.sin(a) * radius * 0.4);
+        blob.scale.y = 0.78 + Math.random() * 0.3;
+        blob.castShadow = hi;
+        canopy.add(blob);
+      }
+    } else {
+      // fir: smooth, slightly irregular cones
+      for (let i = 0; i < 3; i++) {
+        const f = 1 - i / 3;
+        const cone = new THREE.Mesh(
+          jitterGeometry(new THREE.ConeGeometry(radius * (0.75 + f * 0.6), radius * 1.7, 14, 3), radius * 0.06),
+          leafMat
+        );
+        cone.position.y = radius * (2.5 + i * 0.95);
+        cone.rotation.y = Math.random() * Math.PI;
+        cone.castShadow = hi;
+        canopy.add(cone);
+      }
     }
     g.add(canopy); g.position.set(x, 0, y);
     this.foliage.push({ mesh: canopy, sway: 0.04 + Math.random() * 0.03, phase: Math.random() * Math.PI * 2 });
@@ -440,23 +562,25 @@ export class Game3D {
   }
 
   private makeRock(x: number, y: number, radius: number, hi: boolean): THREE.Group {
+    // Natural boulders: subdivided icosahedra displaced by noise + stone relief.
     const g = new THREE.Group();
-    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x858b91, roughness: 0.94, flatShading: true });
-    const main = new THREE.Mesh(new THREE.IcosahedronGeometry(radius, 0), stoneMat);
-    main.scale.set(1, 0.78 + Math.random() * 0.3, 1);
+    const stone = this.getStoneTexture();
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x858b91, roughness: 0.94, map: stone, bumpMap: stone, bumpScale: 1.6 });
+    const main = new THREE.Mesh(jitterGeometry(new THREE.IcosahedronGeometry(radius, 2), radius * 0.16), stoneMat);
+    main.scale.set(1, 0.74 + Math.random() * 0.3, 1);
     main.position.y = radius * 0.45;
     main.rotation.set(Math.random(), Math.random() * 3, Math.random());
     main.castShadow = hi; main.receiveShadow = true; g.add(main);
     const cap = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(radius * 0.7, 0),
-      new THREE.MeshStandardMaterial({ color: 0x6d854e, roughness: 0.96, flatShading: true })
+      jitterGeometry(new THREE.IcosahedronGeometry(radius * 0.72, 1), radius * 0.08),
+      new THREE.MeshStandardMaterial({ color: 0x6d854e, roughness: 0.96 })
     );
-    cap.position.y = radius * 0.92; cap.scale.y = 0.4; g.add(cap);
+    cap.position.y = radius * 0.92; cap.scale.y = 0.38; g.add(cap);
     const n = 2 + Math.floor(Math.random() * 2);
     for (let i = 0; i < n; i++) {
       const r2 = radius * (0.3 + Math.random() * 0.3);
       const a = Math.random() * Math.PI * 2, d = radius * (0.9 + Math.random() * 0.5);
-      const sr = new THREE.Mesh(new THREE.IcosahedronGeometry(r2, 0), stoneMat);
+      const sr = new THREE.Mesh(jitterGeometry(new THREE.IcosahedronGeometry(r2, 1), r2 * 0.18), stoneMat);
       sr.position.set(Math.cos(a) * d, r2 * 0.4, Math.sin(a) * d);
       sr.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
       sr.castShadow = hi; g.add(sr);
@@ -467,14 +591,17 @@ export class Game3D {
 
   private makeRuin(x: number, y: number, radius: number, hi: boolean): THREE.Group {
     const g = new THREE.Group();
-    const stone = new THREE.MeshStandardMaterial({ color: 0x6b668a, emissive: 0x17122a, emissiveIntensity: 0.12, roughness: 0.88, flatShading: true });
-    const h = radius * 2.2 * (0.7 + Math.random() * 0.6);
-    const col = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.5, radius * 0.62, h, 8), stone);
-    col.position.y = h / 2; col.castShadow = hi; col.receiveShadow = true; g.add(col);
-    const base = new THREE.Mesh(new THREE.BoxGeometry(radius * 1.5, radius * 0.4, radius * 1.5), stone);
+    const stoneTex = this.getStoneTexture();
+    const stone = new THREE.MeshStandardMaterial({ color: 0x6b668a, emissive: 0x17122a, emissiveIntensity: 0.12, roughness: 0.88, map: stoneTex, bumpMap: stoneTex, bumpScale: 1.5 });
+    const h = radius * 3.1 * (0.7 + Math.random() * 0.6);
+    // Weathered fluted column: smooth, slightly eroded
+    const col = new THREE.Mesh(jitterGeometry(new THREE.CylinderGeometry(radius * 0.5, radius * 0.64, h, 14, 5), radius * 0.05), stone);
+    col.position.y = h / 2; col.rotation.z = (Math.random() - 0.5) * 0.05;
+    col.castShadow = hi; col.receiveShadow = true; g.add(col);
+    const base = new THREE.Mesh(jitterGeometry(new THREE.CylinderGeometry(radius * 0.95, radius * 1.1, radius * 0.42, 10), radius * 0.05), stone);
     base.position.y = radius * 0.2; base.castShadow = hi; g.add(base);
     if (Math.random() > 0.4) {
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(radius * 1.35, radius * 0.5, radius * 1.35), stone);
+      const cap = new THREE.Mesh(jitterGeometry(new THREE.CylinderGeometry(radius * 0.85, radius * 0.7, radius * 0.5, 10), radius * 0.06), stone);
       cap.position.y = h + radius * 0.2; cap.rotation.y = Math.random(); cap.castShadow = hi; g.add(cap);
     }
     const runeMat = new THREE.MeshStandardMaterial({ color: 0x9b6bff, emissive: 0x9b6bff, emissiveIntensity: 1.7, roughness: 0.4 });
@@ -502,7 +629,7 @@ export class Game3D {
   private scatterGrass() {
     const blade = new THREE.ConeGeometry(3.4, 16, 4); blade.translate(0, 8, 0);
     const count = 2400;
-    const inst = new THREE.InstancedMesh(blade, new THREE.MeshStandardMaterial({ roughness: 1, flatShading: true }), count);
+    const inst = new THREE.InstancedMesh(blade, new THREE.MeshStandardMaterial({ roughness: 1 }), count);
     const dummy = new THREE.Object3D(); const col = new THREE.Color();
     let placed = 0;
     for (let i = 0; i < count * 4 && placed < count; i++) {
@@ -533,7 +660,7 @@ export class Game3D {
       const zone = zoneAt(x, z);
       const hue = zone.id === 'obsidian_ruins' ? 0x9b6bff : zone.id === 'moonfen_marsh' ? 0x49d6c8 : 0x8ad6ff;
       const g = new THREE.Group();
-      const mat = new THREE.MeshStandardMaterial({ color: hue, emissive: hue, emissiveIntensity: 1.9, roughness: 0.3, flatShading: true });
+      const mat = new THREE.MeshStandardMaterial({ color: hue, emissive: hue, emissiveIntensity: 1.9, roughness: 0.3 });
       const n = 3 + Math.floor(Math.random() * 3);
       for (let j = 0; j < n; j++) {
         const cs = 8 + Math.random() * 12;
@@ -598,10 +725,10 @@ export class Game3D {
       metalness: 0.04,
       flatShading: true,
     });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x302418, roughness: 0.82, flatShading: true });
-    const bone = new THREE.MeshStandardMaterial({ color: 0xf0dca4, emissive: 0x3b2c12, emissiveIntensity: 0.12, roughness: 0.66, flatShading: true });
-    const metal = new THREE.MeshStandardMaterial({ color: 0xd9e8ef, roughness: 0.36, metalness: 0.45, flatShading: true });
-    const accent = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.45, roughness: 0.3, flatShading: true });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x302418, roughness: 0.82 });
+    const bone = new THREE.MeshStandardMaterial({ color: 0xf0dca4, emissive: 0x3b2c12, emissiveIntensity: 0.12, roughness: 0.66 });
+    const metal = new THREE.MeshStandardMaterial({ color: 0xd9e8ef, roughness: 0.36, metalness: 0.45 });
+    const accent = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.45, roughness: 0.3 });
 
     const rig: Rig = { phase: Math.random() * Math.PI * 2, stride: 0, attack: 0 };
 
@@ -658,7 +785,7 @@ export class Game3D {
       gem.position.set(2, 34, 4);
       armR.add(staff, gem);
     } else if (classKey === 'raven_witch') {
-      const beak = new THREE.Mesh(new THREE.ConeGeometry(4.5, 14, 4), new THREE.MeshStandardMaterial({ color: 0x141017, roughness: 0.7, flatShading: true }));
+      const beak = new THREE.Mesh(new THREE.ConeGeometry(4.5, 14, 4), new THREE.MeshStandardMaterial({ color: 0x141017, roughness: 0.7 }));
       beak.rotation.x = Math.PI / 2; beak.position.set(0, -2, 12); head.add(beak);
       for (const side of [-1, 1]) {
         const wing = new THREE.Mesh(new THREE.ConeGeometry(7, 34, 3), dark);
@@ -729,13 +856,13 @@ export class Game3D {
       g.add(core, flame, halo);
       const light = new THREE.PointLight(color, 0.9, 210); light.position.y = 36; g.add(light);
     } else if (type === 'bramble_beast') {
-      const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).offsetHSL(0, 0.06, 0.12), emissive: 0x233915, emissiveIntensity: 0.16, roughness: 0.94, flatShading: true });
+      const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).offsetHSL(0, 0.06, 0.12), emissive: 0x233915, emissiveIntensity: 0.16, roughness: 0.94 });
       const body = new THREE.Mesh(new THREE.DodecahedronGeometry(24, 0), bodyMat);
       body.scale.set(1.35, 0.9, 1.05);
       body.position.y = 23; body.castShadow = true; g.add(body);
       const head = new THREE.Mesh(new THREE.DodecahedronGeometry(14, 0), bodyMat);
       head.position.set(18, 28, 8); head.castShadow = true; g.add(head);
-      const thornMat = new THREE.MeshStandardMaterial({ color: 0x6d8f2f, emissive: 0x263f12, emissiveIntensity: 0.18, roughness: 1, flatShading: true });
+      const thornMat = new THREE.MeshStandardMaterial({ color: 0x6d8f2f, emissive: 0x263f12, emissiveIntensity: 0.18, roughness: 1 });
       for (let i = 0; i < 11; i++) {
         const th = new THREE.Mesh(new THREE.ConeGeometry(4, 20, 5), thornMat);
         const a = (i / 11) * Math.PI * 2;
@@ -743,17 +870,17 @@ export class Game3D {
         th.rotation.set(Math.PI / 2, 0, -a); th.castShadow = true; g.add(th);
       }
       for (const side of [-1, 1]) {
-        const horn = new THREE.Mesh(new THREE.ConeGeometry(3.2, 18, 6), new THREE.MeshStandardMaterial({ color: 0xa48649, roughness: 1, flatShading: true }));
+        const horn = new THREE.Mesh(new THREE.ConeGeometry(3.2, 18, 6), new THREE.MeshStandardMaterial({ color: 0xa48649, roughness: 1 }));
         horn.position.set(24, 39, side * 8); horn.rotation.set(0, 0, -0.9); g.add(horn);
       }
     } else {
-      const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).offsetHSL(0, 0.04, 0.08), emissive: color, emissiveIntensity: 0.48, roughness: 0.46, flatShading: true });
+      const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).offsetHSL(0, 0.04, 0.08), emissive: color, emissiveIntensity: 0.48, roughness: 0.46 });
       const body = new THREE.Mesh(new THREE.TetrahedronGeometry(15, 0), bodyMat);
       body.position.y = 18; body.castShadow = true;
       const eyes = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 10), new THREE.MeshStandardMaterial({ color: 0xfff2a8, emissive: 0xffd24a, emissiveIntensity: 0.8 }));
       eyes.position.y = 30;
       for (const side of [-1, 1]) {
-        const horn = new THREE.Mesh(new THREE.ConeGeometry(3.2, 15, 5), new THREE.MeshStandardMaterial({ color: 0x2c183a, roughness: 0.7, flatShading: true }));
+        const horn = new THREE.Mesh(new THREE.ConeGeometry(3.2, 15, 5), new THREE.MeshStandardMaterial({ color: 0x2c183a, roughness: 0.7 }));
         horn.position.set(side * 8, 39, 0);
         horn.rotation.z = side * -0.45;
         g.add(horn);
@@ -772,9 +899,9 @@ export class Game3D {
   private createUnitMesh(ownerIsLocal: boolean): THREE.Group {
     const g = new THREE.Group();
     const clothColor = ownerIsLocal ? 0xf0c96f : 0x9fc5eb;
-    const cloth = new THREE.MeshStandardMaterial({ color: clothColor, emissive: clothColor, emissiveIntensity: 0.12, roughness: 0.72, flatShading: true });
-    const leather = new THREE.MeshStandardMaterial({ color: 0x5a3f26, roughness: 0.86, flatShading: true });
-    const metal = new THREE.MeshStandardMaterial({ color: 0xd8d1b9, roughness: 0.38, metalness: 0.34, flatShading: true });
+    const cloth = new THREE.MeshStandardMaterial({ color: clothColor, emissive: clothColor, emissiveIntensity: 0.12, roughness: 0.72 });
+    const leather = new THREE.MeshStandardMaterial({ color: 0x5a3f26, roughness: 0.86 });
+    const metal = new THREE.MeshStandardMaterial({ color: 0xd8d1b9, roughness: 0.38, metalness: 0.34 });
 
     const body = new THREE.Mesh(new THREE.CapsuleGeometry(7, 16, 4, 10), cloth);
     body.position.y = 20; body.castShadow = true;
@@ -804,18 +931,18 @@ export class Game3D {
     const g = new THREE.Group();
     if (type === 'wood') {
       // small choppable tree (talar)
-      const stump = new THREE.Mesh(new THREE.CylinderGeometry(9, 10, 6, 8), new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 1, flatShading: true }));
+      const stump = new THREE.Mesh(new THREE.CylinderGeometry(9, 10, 6, 8), new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 1 }));
       stump.position.y = 3; g.add(stump);
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 7.5, 32, 7), new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 1, flatShading: true }));
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 7.5, 32, 7), new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 1 }));
       trunk.position.y = 20; trunk.castShadow = true; g.add(trunk);
-      const leafMat = new THREE.MeshStandardMaterial({ color: 0x66bd5b, emissive: 0x1b4a24, emissiveIntensity: 0.12, roughness: 0.96, flatShading: true });
+      const leafMat = new THREE.MeshStandardMaterial({ color: 0x66bd5b, emissive: 0x1b4a24, emissiveIntensity: 0.12, roughness: 0.96 });
       for (let i = 0; i < 2; i++) {
         const leaf = new THREE.Mesh(new THREE.ConeGeometry(20 - i * 5, 30, 7), leafMat);
         leaf.position.y = 40 + i * 12; leaf.castShadow = true; g.add(leaf);
       }
     } else if (type === 'stone') {
       // ore boulder (minar)
-      const rockMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(info.color).offsetHSL(0, -0.02, 0.1), roughness: 0.94, flatShading: true });
+      const rockMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(info.color).offsetHSL(0, -0.02, 0.1), roughness: 0.94 });
       const main = new THREE.Mesh(new THREE.DodecahedronGeometry(15, 0), rockMat);
       main.position.y = 12; main.scale.set(1.1, 0.9, 1); main.castShadow = true; g.add(main);
       for (let i = 0; i < 3; i++) {
@@ -823,14 +950,14 @@ export class Game3D {
         const r = new THREE.Mesh(new THREE.DodecahedronGeometry(6 - i, 0), rockMat);
         r.position.set(Math.cos(a) * 13, 5, Math.sin(a) * 13); r.castShadow = true; g.add(r);
       }
-      const oreMat = new THREE.MeshStandardMaterial({ color: 0xcdd6e0, emissive: 0x7c8aa0, emissiveIntensity: 1.1, roughness: 0.5, flatShading: true });
+      const oreMat = new THREE.MeshStandardMaterial({ color: 0xcdd6e0, emissive: 0x7c8aa0, emissiveIntensity: 1.1, roughness: 0.5 });
       for (const p of [[4, 16, 7], [-6, 13, 4], [2, 10, -7]]) {
         const ore = new THREE.Mesh(new THREE.OctahedronGeometry(3, 0), oreMat);
         ore.position.set(p[0], p[1], p[2]); g.add(ore);
       }
     } else {
       // essence / rune_shard: glowing crystal cluster
-      const cmat = new THREE.MeshStandardMaterial({ color: info.color, emissive: info.color, emissiveIntensity: 1.5, roughness: 0.2, flatShading: true });
+      const cmat = new THREE.MeshStandardMaterial({ color: info.color, emissive: info.color, emissiveIntensity: 1.5, roughness: 0.2 });
       const c = new THREE.Mesh(new THREE.OctahedronGeometry(11, 0), cmat);
       c.position.y = 24; c.scale.y = 1.5; c.castShadow = true; g.add(c);
       for (let i = 0; i < 3; i++) {
@@ -882,7 +1009,7 @@ export class Game3D {
     const def = STRUCTURE_DEFS[type];
     const g = new THREE.Group();
     if (type === 'campfire') {
-      const stones = new THREE.Mesh(new THREE.TorusGeometry(16, 5, 6, 14), new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 1, flatShading: true }));
+      const stones = new THREE.Mesh(new THREE.TorusGeometry(16, 5, 6, 14), new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 1 }));
       stones.rotation.x = -Math.PI / 2; stones.position.y = 4;
       const fire = new THREE.Mesh(new THREE.ConeGeometry(11, 30, 8), new THREE.MeshBasicMaterial({ color: def.color, transparent: true, opacity: 0.9 }));
       fire.position.y = 18; fire.name = 'fire';
@@ -892,17 +1019,17 @@ export class Game3D {
       const aura = new THREE.Mesh(new THREE.RingGeometry(def.radius - 4, def.radius, 40), new THREE.MeshBasicMaterial({ color: def.color, transparent: true, opacity: 0.12, side: THREE.DoubleSide }));
       aura.rotation.x = -Math.PI / 2; aura.position.y = 1; g.add(aura);
     } else if (type === 'wall') {
-      const mat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 1, flatShading: true });
+      const mat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 1, map: this.getStoneTexture() });
       const body = new THREE.Mesh(new THREE.BoxGeometry(74, 46, 26), mat);
       body.position.y = 23; body.castShadow = true; body.receiveShadow = true; g.add(body);
       for (let i = -1; i <= 1; i++) {
         const cr = new THREE.Mesh(new THREE.BoxGeometry(16, 12, 26), mat);
         cr.position.set(i * 27, 52, 0); cr.castShadow = true; g.add(cr);
       }
-      const seam = new THREE.Mesh(new THREE.BoxGeometry(75, 4, 27), new THREE.MeshStandardMaterial({ color: 0x6f6354, roughness: 1, flatShading: true }));
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(75, 4, 27), new THREE.MeshStandardMaterial({ color: 0x6f6354, roughness: 1 }));
       seam.position.y = 30; g.add(seam);
     } else if (type === 'barracks') {
-      const tent = new THREE.Mesh(new THREE.ConeGeometry(34, 46, 4), new THREE.MeshStandardMaterial({ color: def.color, roughness: 1, flatShading: true }));
+      const tent = new THREE.Mesh(new THREE.ConeGeometry(34, 46, 4), new THREE.MeshStandardMaterial({ color: def.color, roughness: 1 }));
       tent.rotation.y = Math.PI / 4; tent.position.y = 23; tent.castShadow = true; g.add(tent);
       const door = new THREE.Mesh(new THREE.BoxGeometry(12, 18, 2), new THREE.MeshStandardMaterial({ color: 0x3a2a18, roughness: 1 }));
       door.position.set(0, 9, 24); g.add(door);
@@ -913,9 +1040,9 @@ export class Game3D {
       const aura = new THREE.Mesh(new THREE.RingGeometry(def.radius - 4, def.radius, 48), new THREE.MeshBasicMaterial({ color: 0xffcf6a, transparent: true, opacity: 0.07, side: THREE.DoubleSide }));
       aura.rotation.x = -Math.PI / 2; aura.position.y = 1; g.add(aura);
     } else if (type === 'shelter') {
-      const base = new THREE.Mesh(new THREE.BoxGeometry(52, 34, 46), new THREE.MeshStandardMaterial({ color: 0xb9a07a, roughness: 1, flatShading: true }));
+      const base = new THREE.Mesh(new THREE.BoxGeometry(52, 34, 46), new THREE.MeshStandardMaterial({ color: 0xb9a07a, roughness: 1 }));
       base.position.y = 17; base.castShadow = true; base.receiveShadow = true; g.add(base);
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(42, 28, 4), new THREE.MeshStandardMaterial({ color: def.color, roughness: 1, flatShading: true }));
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(42, 28, 4), new THREE.MeshStandardMaterial({ color: def.color, roughness: 1 }));
       roof.rotation.y = Math.PI / 4; roof.position.y = 48; roof.castShadow = true; g.add(roof);
       const door = new THREE.Mesh(new THREE.BoxGeometry(14, 22, 2), new THREE.MeshStandardMaterial({ color: 0x4a3420, roughness: 1, emissive: 0xffcf6a, emissiveIntensity: 0.6 }));
       door.position.set(0, 11, 24); g.add(door);
@@ -925,9 +1052,9 @@ export class Game3D {
       const aura = new THREE.Mesh(new THREE.RingGeometry(def.radius - 4, def.radius, 48), new THREE.MeshBasicMaterial({ color: 0x9fd6ff, transparent: true, opacity: 0.07, side: THREE.DoubleSide }));
       aura.rotation.x = -Math.PI / 2; aura.position.y = 1; g.add(aura);
     } else {
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(7, 9, 70, 7), new THREE.MeshStandardMaterial({ color: 0x6b5a3a, roughness: 1, flatShading: true }));
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(7, 9, 70, 7), new THREE.MeshStandardMaterial({ color: 0x6b5a3a, roughness: 1 }));
       pole.position.y = 35; pole.castShadow = true;
-      const top = new THREE.Mesh(new THREE.OctahedronGeometry(16, 0), new THREE.MeshStandardMaterial({ color: def.color, emissive: def.color, emissiveIntensity: 0.7, flatShading: true }));
+      const top = new THREE.Mesh(new THREE.OctahedronGeometry(16, 0), new THREE.MeshStandardMaterial({ color: def.color, emissive: def.color, emissiveIntensity: 0.7 }));
       top.position.y = 78;
       const light = new THREE.PointLight(def.color, 1, 240); light.position.y = 78; g.add(light);
       g.add(pole, top);
@@ -1222,7 +1349,23 @@ export class Game3D {
   private setupInput() {
     const canvas = this.renderer.domElement;
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    canvas.addEventListener('pointermove', (e) => this.updateAim(e));
+    canvas.addEventListener('pointermove', (e) => {
+      if (this.cameraMode === 'first') {
+        // Drag-look (touch, or mouse when pointer lock is unavailable);
+        // locked-mouse look arrives via the document mousemove handler.
+        if (this.lookId === e.pointerId && document.pointerLockElement !== canvas) {
+          const ldx = e.clientX - this.lookLast.x;
+          const ldy = e.clientY - this.lookLast.y;
+          this.lookLast = { x: e.clientX, y: e.clientY };
+          this.lookMoved += Math.abs(ldx) + Math.abs(ldy);
+          this.yaw -= ldx * 0.0062;
+          this.pitch = clamp(this.pitch - ldy * 0.005, -1.15, 1.05);
+          e.preventDefault();
+        }
+        return;
+      }
+      this.updateAim(e);
+    });
     canvas.addEventListener('pointerdown', (e) => {
       this.audio.ensure();
       this.updateAim(e);
@@ -1230,6 +1373,21 @@ export class Game3D {
         if (e.button === 2) { this.cancelBuild(); return; }
         if (this.buildMode === 'wall') { this.wallDragStart = this.groundPoint(e); return; }
         this.confirmBuild();
+        return;
+      }
+      if (this.cameraMode === 'first') {
+        const locked = document.pointerLockElement === canvas;
+        const coarse = window.matchMedia?.('(pointer: coarse)').matches || e.pointerType === 'touch';
+        if (locked) { this.queueBasicAttack(); e.preventDefault(); return; }
+        // Not locked: try to capture the mouse (desktop) and start drag-look as
+        // a universal fallback; a quick tap/click attacks (resolved on pointerup).
+        if (!coarse) this.tryPointerLock();
+        this.lookId = e.pointerId;
+        this.lookLast = { x: e.clientX, y: e.clientY };
+        this.lookMoved = 0;
+        this.lookStart = performance.now();
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* */ }
+        e.preventDefault();
         return;
       }
       // Left/primary click (or tap): clicking an enemy attacks it, a resource
@@ -1251,6 +1409,14 @@ export class Game3D {
       }
     });
     canvas.addEventListener('pointerup', (e) => {
+      if (this.cameraMode === 'first' && this.lookId === e.pointerId) {
+        // quick tap/click = attack — unless this click just captured the mouse
+        if (document.pointerLockElement !== canvas && this.lookMoved < 12 && performance.now() - this.lookStart < 320) {
+          this.queueBasicAttack();
+        }
+        this.lookId = null;
+        return;
+      }
       if (this.buildMode === 'wall' && this.wallDragStart) {
         this.placeWallLine(this.wallDragStart, this.groundPoint(e) ?? this.wallDragStart);
         this.wallDragStart = null;
@@ -1263,10 +1429,109 @@ export class Game3D {
   private queueBasicAttack() { this.queuedAbility = 'basic'; }
 
   private toggleCamera() {
-    this.cameraMode = this.cameraMode === 'iso' ? 'third' : 'iso';
+    const order: Array<'iso' | 'third' | 'first'> = ['iso', 'third', 'first'];
+    const prev = this.cameraMode;
+    this.cameraMode = order[(order.indexOf(this.cameraMode) + 1) % order.length];
+    const labels = { iso: '🎥 Aérea', third: '🎥 3ª pers.', first: '🎥 1ª pers.' } as const;
+    const names = { iso: 'Vista aérea', third: 'Vista en tercera persona', first: 'Primera persona — mira con el ratón, clic para atacar' } as const;
     const btn = document.getElementById('cambtn3d');
-    if (btn) btn.textContent = this.cameraMode === 'iso' ? '🎥 Vista' : '🎥 3ª pers.';
-    this.showToast(this.cameraMode === 'iso' ? 'Vista aérea' : 'Vista en tercera persona');
+    if (btn) btn.textContent = labels[this.cameraMode];
+    this.showToast(names[this.cameraMode]);
+    if (this.cameraMode === 'first') this.enterFirstPerson();
+    else if (prev === 'first') this.exitFirstPerson();
+  }
+
+  private enterFirstPerson() {
+    // Align the look direction with where the hero is facing.
+    const me = this.players.get(this.localId);
+    if (me) this.yaw = me.group.rotation.y;
+    this.pitch = -0.08;
+    this.pendingAction = null;
+    this.clearMoveTarget();
+    this.cancelBuild();
+    this.buildFpWeapon();
+    if (this.fpWeapon) this.fpWeapon.visible = true;
+    this.setLocalMeshHidden(true);
+    const cross = document.getElementById('cross3d');
+    if (cross) cross.style.display = 'block';
+    const coarse = window.matchMedia?.('(pointer: coarse)').matches;
+    if (!coarse) {
+      // Browsers may deny pointer lock from a keypress — the first click will
+      // capture it; until then drag-look works as a fallback.
+      this.tryPointerLock();
+      this.showToast('1ª persona: clic para capturar el ratón · WASD moverte · V cambia vista');
+    }
+  }
+
+  private tryPointerLock() {
+    try {
+      const p = this.renderer.domElement.requestPointerLock?.() as unknown as Promise<void> | undefined;
+      p?.catch?.(() => undefined);
+    } catch { /* denied — drag-look fallback still works */ }
+  }
+
+  private exitFirstPerson() {
+    if (document.pointerLockElement === this.renderer.domElement) document.exitPointerLock?.();
+    if (this.fpWeapon) this.fpWeapon.visible = false;
+    this.setLocalMeshHidden(false);
+    const cross = document.getElementById('cross3d');
+    if (cross) cross.style.display = 'none';
+    this.lookId = null;
+  }
+
+  /** Hide the hero's body in first person but keep its lights (torch) alive. */
+  private setLocalMeshHidden(hidden: boolean) {
+    const me = this.players.get(this.localId);
+    if (!me) return;
+    me.group.userData.fpHidden = hidden;
+    me.group.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh || (o as THREE.Sprite).isSprite) o.visible = !hidden;
+    });
+  }
+
+  /** Class weapon held in view in first person (a camera child). */
+  private buildFpWeapon() {
+    if (this.fpWeapon) return;
+    const key = this.session.classKey;
+    const color = CLASS_COLORS[key] ?? 0xffffff;
+    const g = new THREE.Group();
+    const wood = new THREE.MeshStandardMaterial({ color: 0x6a4a2c, roughness: 0.9 });
+    const metal = new THREE.MeshStandardMaterial({ color: 0xc8d4de, roughness: 0.35, metalness: 0.5 });
+    const glow = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.6, roughness: 0.3 });
+    if (key === 'wolf_guardian') {
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(1.2, 13, 1.8), metal);
+      blade.position.y = 8.5;
+      const guard = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.9, 2.2), metal);
+      guard.position.y = 2.2;
+      const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 4, 6), wood);
+      g.add(blade, guard, grip);
+    } else if (key === 'fox_trickster') {
+      const blade = new THREE.Mesh(new THREE.ConeGeometry(1.1, 9, 4), metal);
+      blade.position.y = 6.5;
+      const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 3.6, 6), wood);
+      g.add(blade, grip);
+    } else {
+      // druid / witch: short staff with a glowing focus
+      const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.75, 15, 7), wood);
+      staff.position.y = 4;
+      const gem = new THREE.Mesh(new THREE.OctahedronGeometry(1.7, 0), glow);
+      gem.position.y = 12.4;
+      const gemLight = new THREE.PointLight(color, 0.5, 60);
+      gemLight.position.y = 12.4;
+      g.add(staff, gem, gemLight);
+    }
+    g.position.set(7.5, -7.5, -18);
+    g.rotation.set(0.22, -0.28, 0.12);
+    g.visible = false;
+    this.fpWeapon = g;
+    this.camera.add(g);
+  }
+
+  private handleLockChange() {
+    // Browser kicked us out of pointer lock (Esc); stay in FP — a click re-locks.
+    if (this.cameraMode === 'first' && document.pointerLockElement !== this.renderer.domElement) {
+      this.showToast('Clic en el mundo para volver a capturar el ratón');
+    }
   }
 
   private groundPoint(e: PointerEvent): THREE.Vector3 | null {
@@ -1402,11 +1667,24 @@ export class Game3D {
 
   private collectInput(): PlayerInputPayload | null {
     let dx = 0, dy = 0;
-    if (this.keys['KeyA'] || this.keys['ArrowLeft']) dx -= 1;
-    if (this.keys['KeyD'] || this.keys['ArrowRight']) dx += 1;
-    if (this.keys['KeyW'] || this.keys['ArrowUp']) dy -= 1;
-    if (this.keys['KeyS'] || this.keys['ArrowDown']) dy += 1;
-    dx += this.joyDx; dy += this.joyDy;
+    if (this.cameraMode === 'first') {
+      // FP: W follows the look direction; A/D strafe.
+      let fwd = 0, strafe = 0;
+      if (this.keys['KeyW'] || this.keys['ArrowUp']) fwd += 1;
+      if (this.keys['KeyS'] || this.keys['ArrowDown']) fwd -= 1;
+      if (this.keys['KeyD'] || this.keys['ArrowRight']) strafe += 1;
+      if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafe -= 1;
+      fwd += -this.joyDy; strafe += this.joyDx;
+      const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
+      dx = sy * fwd + cy * strafe;
+      dy = cy * fwd - sy * strafe;
+    } else {
+      if (this.keys['KeyA'] || this.keys['ArrowLeft']) dx -= 1;
+      if (this.keys['KeyD'] || this.keys['ArrowRight']) dx += 1;
+      if (this.keys['KeyW'] || this.keys['ArrowUp']) dy -= 1;
+      if (this.keys['KeyS'] || this.keys['ArrowDown']) dy += 1;
+      dx += this.joyDx; dy += this.joyDy;
+    }
 
     // Manual input (keys/joystick) cancels click commands; otherwise resolve the
     // pending Diablo-style action (chase enemy / walk to resource) into steering.
@@ -1461,15 +1739,18 @@ export class Game3D {
     if (abilityKey) {
       const me = this.players.get(this.localId);
       if (me?.rig) me.rig.attack = 1;
+      if (this.cameraMode === 'first') this.fpSwing = 1;
       const nowMs = performance.now();
       if (nowMs - this.lastAbilitySfx > 380) {
         this.lastAbilitySfx = nowMs;
         this.audio.sfx(abilityKey === 'basic' ? 'attack' : 'ability');
       }
     }
-    // Damage abilities auto-aim the nearest foe; movement abilities (E: blink/
-    // dash/leap) head to the cursor / last tap instead.
-    const aim = abilityKey === 'e' ? this.aim : abilityKey ? this.autoAim() : this.aim;
+    // FP aims everything at the crosshair; otherwise damage abilities auto-aim
+    // the nearest foe and movement abilities (E) head to the cursor / last tap.
+    const aim = this.cameraMode === 'first' ? this.aim
+      : abilityKey === 'e' ? this.aim
+      : abilityKey ? this.autoAim() : this.aim;
     return { seq: this.seq++, dx, dy, abilityKey, aimX: aim.x, aimY: aim.z, timestamp: Date.now() };
   }
 
@@ -1688,7 +1969,40 @@ export class Game3D {
     // camera follow
     const me = this.players.get(this.localId);
     if (me) this.camTarget.lerp(me.group.position, 1 - Math.pow(0.002, dt));
-    if (this.cameraMode === 'third' && me) {
+    if (this.cameraMode === 'first' && me) {
+      if (!me.group.userData.fpHidden) this.setLocalMeshHidden(true);
+      const stride = me.rig?.stride ?? 0;
+      const eye = 50 + Math.sin(stride) * 1.3;
+      this.camera.position.set(me.group.position.x, me.group.position.y + eye, me.group.position.z);
+      const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+      const dir = new THREE.Vector3(Math.sin(this.yaw) * cp, sp, Math.cos(this.yaw) * cp);
+      this.camera.lookAt(
+        this.camera.position.x + dir.x,
+        this.camera.position.y + dir.y,
+        this.camera.position.z + dir.z
+      );
+      this.camTarget.copy(me.group.position);
+      // crosshair aim: project the look ray onto the ground
+      this.raycaster.set(this.camera.position, dir);
+      const hit = new THREE.Vector3();
+      if (this.raycaster.ray.intersectPlane(this.groundPlane, hit)) this.aim.copy(hit);
+      else this.aim.set(me.group.position.x + dir.x * 400, 0, me.group.position.z + dir.z * 400);
+      // viewmodel: idle sway, walk bob, attack swing
+      if (this.fpWeapon) {
+        this.fpWeapon.position.set(
+          7.5 + Math.sin(stride) * 0.45,
+          -7.5 + Math.abs(Math.cos(stride)) * 0.55 + Math.sin(time * 1.7) * 0.16,
+          -18
+        );
+        if (this.fpSwing > 0) {
+          this.fpSwing = Math.max(0, this.fpSwing - dt * 4.2);
+          const a = Math.sin((1 - this.fpSwing) * Math.PI);
+          this.fpWeapon.rotation.set(0.22 - a * 1.25, -0.28 + a * 0.4, 0.12);
+        } else {
+          this.fpWeapon.rotation.set(0.22, -0.28, 0.12);
+        }
+      }
+    } else if (this.cameraMode === 'third' && me) {
       const ang = me.group.rotation.y;
       const fx = Math.sin(ang), fz = Math.cos(ang);
       const desired = new THREE.Vector3(this.camTarget.x - fx * 250, 178, this.camTarget.z - fz * 250);
@@ -1825,6 +2139,9 @@ export class Game3D {
         #game-hud3d #mcode3d{display:none;position:absolute;top:calc(env(safe-area-inset-top,0px) + 8px);left:50%;transform:translateX(-50%);
           pointer-events:auto;font-family:'Cinzel',Georgia,serif;font-size:11px;color:#ffd98a;background:rgba(10,8,6,.74);
           border:1px solid rgba(255,216,138,.35);border-radius:7px;padding:5px 10px;letter-spacing:2px}
+        #game-hud3d #cross3d{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);display:none;
+          width:7px;height:7px;border:2px solid rgba(255,230,170,.95);border-radius:50%;pointer-events:none;z-index:3;
+          box-shadow:0 0 6px rgba(0,0,0,.9),inset 0 0 3px rgba(0,0,0,.6)}
         #game-hud3d #starthint3d{position:absolute;top:36%;left:50%;transform:translate(-50%,-50%);z-index:4;
           background:rgba(10,8,6,.84);border:1px solid rgba(255,216,138,.4);border-radius:12px;padding:13px 22px;
           font-family:'Cinzel',Georgia,serif;color:#f0e6cf;font-size:13px;text-align:center;letter-spacing:.4px;line-height:1.8;
@@ -1925,7 +2242,7 @@ export class Game3D {
       <div id="toast3d"></div>
       <div id="hint3d"></div>
       <canvas id="mini3d" width="170" height="128"></canvas>
-      <div class="controls">Clic: mover · Clic der./J: atacar · Q/R: habilidades · F: recolectar · B: construir · V: vista</div>
+      <div class="controls">Clic: mover · Clic der./J: atacar · Q/E/R: habilidades · F: recolectar · 1-5: construir · V: vista (aérea/3ª/1ª persona) · C: héroe · M: sonido</div>
       <button id="back3d">← Volver al campamento</button>
       <button id="settingsbtn3d">Ajustes</button>
       <button id="cambtn3d">🎥 Vista</button>
@@ -1943,6 +2260,7 @@ export class Game3D {
         </div>
       </div>
       <div id="mcode3d">⚑ ——</div>
+      <div id="cross3d"></div>
       <div id="starthint3d"></div>
       <div id="charpanel3d"><div class="card" id="charcard3d"></div></div>
       <button id="buildbtn3d">🔨 Construir (B)</button>
@@ -2426,6 +2744,9 @@ export class Game3D {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('popstate', this.onPopState);
+    document.removeEventListener('pointerlockchange', this.onLockChange);
+    document.removeEventListener('mousemove', this.onMouseLook);
+    if (document.pointerLockElement === this.renderer.domElement) document.exitPointerLock?.();
     this.players.forEach((e) => disposeGroup(e.group));
     this.enemies.forEach((e) => disposeGroup(e.group));
     this.units.forEach((e) => disposeGroup(e.group));
@@ -2434,6 +2755,9 @@ export class Game3D {
     this.structureMeshes.forEach((g) => disposeGroup(g));
     if (this.buildGhost) disposeSingleMesh(this.buildGhost);
     if (this.moveMarker) disposeSingleMesh(this.moveMarker);
+    if (this.fpWeapon) disposeGroup(this.fpWeapon);
+    this.texBark?.dispose();
+    this.texStone?.dispose();
     if (this.fireflies) disposeGroup(this.fireflies);
     this.audio.dispose();
     this.composer?.dispose();
@@ -2442,6 +2766,29 @@ export class Game3D {
     this.hudEl?.remove();
     this.touchEl?.remove();
   }
+}
+
+/**
+ * Organic-noise displacement: pushes every vertex along its position direction
+ * by a random amount, then rebuilds normals. Turns platonic solids (icosa,
+ * cones, cylinders) into natural, irregular shapes — the antidote to the
+ * "blocky" look.
+ */
+function jitterGeometry<T extends THREE.BufferGeometry>(geo: T, amp: number): T {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const seen = new Map<string, number>();
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    // shared offset per unique vertex position so faces stay welded
+    const key = `${x.toFixed(3)},${y.toFixed(3)},${z.toFixed(3)}`;
+    let off = seen.get(key);
+    if (off === undefined) { off = (Math.random() - 0.5) * 2 * amp; seen.set(key, off); }
+    const len = Math.hypot(x, y, z) || 1;
+    pos.setXYZ(i, x + (x / len) * off, y + (y / len) * off, z + (z / len) * off);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
 }
 
 function lerpAngle(a: number, b: number, t: number): number {
