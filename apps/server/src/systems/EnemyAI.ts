@@ -14,6 +14,12 @@ const MAP_H = WORLD.height;
 export class EnemyAI {
   private lastAttackTime: Map<string, number> = new Map();
   private combat = new CombatSystem();
+  /** Threat multiplier ("la máquina"): scales respawned enemy hp + damage. */
+  private threat = 1;
+
+  setThreat(mult: number) {
+    this.threat = Math.max(1, mult);
+  }
 
   initEnemies(enemies: MapSchema<EnemySchema>) {
     ENEMY_SPAWNS.forEach((sp) => {
@@ -103,8 +109,9 @@ export class EnemyAI {
         if (now - lastAttack >= def.attackCooldownMs) {
           this.lastAttackTime.set(eid, now);
           enemy.animState = 'attack';
-          this.combat.damagePlayer(player, def.attackDamage, now);
-          damageEvents.push({ sourceId: eid, targetId, amount: def.attackDamage });
+          const dmg = Math.round(def.attackDamage * this.threat);
+          this.combat.damagePlayer(player, dmg, now);
+          damageEvents.push({ sourceId: eid, targetId, amount: dmg });
         } else {
           enemy.animState = 'idle';
         }
@@ -120,7 +127,8 @@ export class EnemyAI {
     const def = ENEMY_DEFINITIONS[sp.type];
     enemy.x = sp.x + (Math.random() - 0.5) * 40;
     enemy.y = sp.y + (Math.random() - 0.5) * 40;
-    enemy.hp = def.maxHp;
+    enemy.maxHp = Math.round(def.maxHp * this.threat);
+    enemy.hp = enemy.maxHp;
     enemy.isAlive = true;
     enemy.animState = 'idle';
     enemy.respawnTimer = 0;

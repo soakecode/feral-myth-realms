@@ -295,3 +295,18 @@ export const STRUCTURE_DEFS: Record<StructureType, StructureDef> = {
 export const HARVEST_RANGE = 90;
 export const HARVEST_COOLDOWN_MS = 600;
 export const BUILD_RANGE = 160;
+
+// ---- Threat escalation ("la máquina" presiona con el tiempo) ---------------
+// Both server (enemy stats) and client (HUD) derive the tier from elapsedMs,
+// so no extra sync is needed.
+
+export const THREAT_INTERVAL_MS = 4 * 60 * 1000;
+
+export function threatTier(elapsedMs: number): number {
+  return Math.min(8, Math.floor(elapsedMs / THREAT_INTERVAL_MS));
+}
+
+/** Enemy hp/damage multiplier for the current threat tier. */
+export function threatMultiplier(elapsedMs: number): number {
+  return 1 + threatTier(elapsedMs) * 0.22;
+}

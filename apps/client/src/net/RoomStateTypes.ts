@@ -25,6 +25,7 @@ export interface PlayerState {
   maxEnergy: number;
   level: number;
   xp: number;
+  perkPoints: number;
   isAlive: boolean;
   respawnTimer: number;
   moveSpeed: number;

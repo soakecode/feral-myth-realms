@@ -24,6 +24,7 @@ export class PlayerSchema extends Schema {
   @type('number') maxEnergy: number = 100;
   @type('number') level: number = 1;
   @type('number') xp: number = 0;
+  @type('number') perkPoints: number = 0;
   @type('boolean') isAlive: boolean = true;
   @type('number') respawnTimer: number = 0;
   @type('number') moveSpeed: number = 160;

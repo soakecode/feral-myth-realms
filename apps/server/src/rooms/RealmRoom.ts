@@ -11,7 +11,7 @@ import { validateSupabaseToken } from '../auth/validateToken.js';
 import { persistMatchResult, incrementPlayerStats, updateCharacterXp } from '../db/supabase.js';
 import {
   CLASS_DEFINITIONS, CHAT_MAX_LENGTH, ALIAS_MAX_LENGTH, TICK_MS, ENERGY_REGEN_PER_TICK,
-  WORLD, XP_PER_ENEMY_KILL, HARVEST_COOLDOWN_MS,
+  WORLD, XP_PER_ENEMY_KILL, HARVEST_COOLDOWN_MS, threatMultiplier,
 } from '@fmr/shared';
 import { sanitizeAlias, clamp, generateRoomCode, isBlocked, slowFactorAt, levelFromXp, distance } from '@fmr/shared';
 import { MSG } from '@fmr/shared';
@@ -92,6 +92,19 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
         this.awardXp(client.sessionId, res.xp);
         client.send(MSG.RESOURCE_GAINED, { type: res.type, amount: res.amount });
       }
+    });
+
+    this.onMessage(MSG.PERK_CHOICE, (client, payload: { perk: string }) => {
+      const p = this.state.players.get(client.sessionId);
+      if (!p || !p.isAlive || p.perkPoints <= 0) return;
+      switch (payload?.perk) {
+        case 'vigor': p.maxHp += 25; p.hp = clamp(p.hp + 25, 0, p.maxHp); break;
+        case 'furia': p.attackDamage += 4; break;
+        case 'celeridad': p.moveSpeed = Math.min(Math.round(p.moveSpeed * 1.08), 320); break;
+        case 'foco': p.maxEnergy += 20; p.energy = clamp(p.energy + 20, 0, p.maxEnergy); break;
+        default: return;
+      }
+      p.perkPoints -= 1;
     });
 
     this.onMessage(MSG.BUILD, (client, payload: { structureType: StructureType; x: number; y: number }) => {
@@ -253,10 +266,24 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
       }
     });
 
+    // Threat escalation: "la máquina" presses harder as the realm endures.
+    this.enemyAI.setThreat(threatMultiplier(this.state.elapsedMs));
+
     // Enemy AI tick (walls block creatures)
     const enemyDamage = this.enemyAI.tick(this.state.enemies, this.state.players, deltaMs, now, this.state.structures);
     enemyDamage.forEach((ev) => {
       this.broadcast(MSG.DAMAGE_EVENT, { targetId: ev.targetId, sourceId: ev.sourceId, amount: ev.amount, isPlayer: true });
+    });
+
+    // Kingdom soldiers: trained at barracks, they engage nearby creatures.
+    const unitEvents = this.units.tick(this.state.units, this.state.structures, this.state.enemies, deltaMs, now);
+    unitEvents.forEach((ev) => {
+      this.broadcast(MSG.DAMAGE_EVENT, { targetId: ev.enemyId, sourceId: ev.ownerId, amount: ev.amount, isPlayer: false });
+      if (ev.killed) {
+        // Half XP for the barracks owner — the kingdom fights for you.
+        this.awardXp(ev.ownerId, Math.ceil((XP_PER_ENEMY_KILL[ev.enemyType] ?? 10) / 2));
+        this.broadcast(MSG.ENEMY_DIED, { enemyId: ev.enemyId, killerId: ev.ownerId, enemyType: ev.enemyType });
+      }
     });
 
     // Friendly unit AI: barracks train soldiers that defend the realm.
@@ -316,6 +343,7 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
     // Level up: small permanent stat bump + full heal.
     const newLevel = levelFromXp(player.xp);
     if (newLevel > player.level) {
+      player.perkPoints += newLevel - player.level;
       player.level = newLevel;
       player.maxHp += 10;
       player.maxEnergy += 5;

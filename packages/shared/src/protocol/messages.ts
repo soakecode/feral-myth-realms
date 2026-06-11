@@ -10,6 +10,7 @@ export const MSG = {
   READY: 'ready',
   HARVEST: 'harvest',
   BUILD: 'build',
+  PERK_CHOICE: 'perk_choice',
 
   // Server → Client
   PLAYER_JOINED: 'player_joined',

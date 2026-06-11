@@ -8,7 +8,7 @@ import { getStateCallbacks } from '@colyseus/sdk';
 import type { Room } from '@colyseus/sdk';
 import {
   MSG, CLASS_DEFINITIONS, clamp, WORLD, ZONES, OBSTACLES, zoneAt, isBlocked,
-  RESOURCE_INFO, STRUCTURE_DEFS, HARVEST_RANGE, BUILD_RANGE, distance,
+  RESOURCE_INFO, STRUCTURE_DEFS, HARVEST_RANGE, BUILD_RANGE, distance, threatTier,
 } from '@fmr/shared';
 import type {
   PlayerClass, AbilityKey, PlayerInputPayload, ResourceType, StructureType,
@@ -114,6 +114,8 @@ export class Game3D {
   private currentZone = 'sanctum';
   private objectives: Objective[] = [];
   private objectiveTier = 0;
+  private charOpen = false;
+  private lastThreatTier = 0;
   private toast = '';
   private toastUntil = 0;
 
@@ -154,15 +156,15 @@ export class Game3D {
     this.renderer.shadowMap.type = this.quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = this.quality === 'high' ? 0.92 : 1.06;
+    this.renderer.toneMappingExposure = this.quality === 'high' ? 1.24 : 1.34;
     const canvas = this.renderer.domElement;
     canvas.id = 'game3d-canvas';
     canvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;touch-action:none;';
     document.getElementById('game-container')!.appendChild(canvas);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x080b10);
-    this.scene.fog = new THREE.FogExp2(0x0a0e14, 0.00082);
+    this.scene.background = new THREE.Color(0x162338);
+    this.scene.fog = new THREE.FogExp2(0x24364c, 0.00036);
 
     this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 9000);
 
@@ -189,11 +191,11 @@ export class Game3D {
     // Gradient dusk sky dome
     this.scene.add(this.makeSky());
 
-    // Diablo-like mood: dim cold moonlight + deep shadow, very low ambient for
-    // high contrast. The warmth + readable pools of light come from braziers.
-    this.scene.add(new THREE.HemisphereLight(0x556c8a, 0x130e09, 0.32));
-    this.scene.add(new THREE.AmbientLight(0x1a2130, 0.13));
-    const sun = new THREE.DirectionalLight(0xaab7d4, 1.3);
+    // Dark fantasy mood, but kept readable on deployed/mobile screens.
+    // Contrast comes from rim light and colored props instead of crushing blacks.
+    this.scene.add(new THREE.HemisphereLight(0x8fb5da, 0x2b2119, 0.7));
+    this.scene.add(new THREE.AmbientLight(0x2f4056, 0.36));
+    const sun = new THREE.DirectionalLight(0xd8e7ff, 1.85);
     sun.position.set(WORLD.width * 0.34, 2500, WORLD.height * 0.04);
     sun.castShadow = true;
     sun.shadow.mapSize.set(hi ? 2048 : 1024, hi ? 2048 : 1024);
@@ -204,15 +206,15 @@ export class Game3D {
     const s = 1500; scam.left = -s; scam.right = s; scam.top = s; scam.bottom = -s; scam.updateProjectionMatrix();
     sun.target.position.set(WORLD.sanctum.x, 0, WORLD.sanctum.y);
     this.scene.add(sun, sun.target);
-    const rim = new THREE.DirectionalLight(0x3a4c6b, 0.38);
+    const rim = new THREE.DirectionalLight(0x79a8ff, 0.78);
     rim.position.set(-WORLD.width * 0.2, 1500, WORLD.height * 1.15);
     this.scene.add(rim);
 
-    // Biome ground — undulating terrain with a procedural stone/dirt texture,
-    // darkened per biome for the gothic palette.
-    const groundTex = this.makeGroundTexture();
-    if (groundTex) { groundTex.wrapS = groundTex.wrapT = THREE.RepeatWrapping; groundTex.repeat.set(2000 / 230, 1500 / 230); }
+    // Biome ground: each realm gets its own procedural tile palette so the map
+    // reads as terrain instead of a flat dark sheet.
     for (const z of ZONES) {
+      const groundTex = this.makeGroundTexture(z.id);
+      if (groundTex) { groundTex.wrapS = groundTex.wrapT = THREE.RepeatWrapping; groundTex.repeat.set(z.w / 180, z.h / 180); }
       const geo = new THREE.PlaneGeometry(z.w, z.h, hi ? 40 : 12, hi ? 30 : 9);
       const pos = geo.attributes.position as THREE.BufferAttribute;
       for (let i = 0; i < pos.count; i++) {
@@ -220,8 +222,15 @@ export class Game3D {
         pos.setZ(i, Math.sin(x * 0.0042 + 1.3) * Math.cos(y * 0.0051) * 7 + Math.sin((x + y) * 0.0026) * 5);
       }
       geo.computeVertexNormals();
-      const col = new THREE.Color(z.color).lerp(new THREE.Color(0x0d0b09), 0.46);
-      const g = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: col, roughness: 1, map: groundTex ?? null }));
+      const col = new THREE.Color(z.color).offsetHSL(0, -0.03, 0.13);
+      const g = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+        color: col,
+        roughness: 0.92,
+        metalness: 0.02,
+        map: groundTex ?? null,
+        emissive: new THREE.Color(z.accent).multiplyScalar(0.08),
+        emissiveIntensity: 0.08,
+      }));
       g.rotation.x = -Math.PI / 2;
       g.position.set(z.x + z.w / 2, 0, z.y + z.h / 2);
       g.receiveShadow = true;
@@ -231,13 +240,13 @@ export class Game3D {
     // Central sanctum glade + carved stone ring
     const glade = new THREE.Mesh(
       new THREE.CircleGeometry(WORLD.sanctum.r, 56),
-      new THREE.MeshStandardMaterial({ color: 0x53785f, roughness: 0.95, emissive: 0x163020, emissiveIntensity: 0.5 })
+      new THREE.MeshStandardMaterial({ color: 0x6da86f, roughness: 0.9, emissive: 0x2a6a3a, emissiveIntensity: 0.32 })
     );
     glade.rotation.x = -Math.PI / 2; glade.position.set(WORLD.sanctum.x, 0.6, WORLD.sanctum.y);
     glade.receiveShadow = true; this.scene.add(glade);
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(WORLD.sanctum.r - 8, 6, 8, 72),
-      new THREE.MeshStandardMaterial({ color: 0x8a7d52, roughness: 0.7, emissive: 0x2a2410, emissiveIntensity: 0.5 })
+      new THREE.MeshStandardMaterial({ color: 0xb8a46a, roughness: 0.62, metalness: 0.08, emissive: 0x4a3714, emissiveIntensity: 0.28 })
     );
     ring.rotation.x = -Math.PI / 2; ring.position.set(WORLD.sanctum.x, 2, WORLD.sanctum.y); this.scene.add(ring);
 
@@ -267,35 +276,65 @@ export class Game3D {
     this.buildAtmosphere();
   }
 
-  private makeGroundTexture(): THREE.CanvasTexture | null {
+  private makeGroundTexture(zoneId: string): THREE.CanvasTexture | null {
+    const palette = zoneId === 'emerald_grove'
+      ? { base: '#536b34', mid: '#748f3f', hi: '#9fc86a', crack: '#263216', moss: '#30b978' }
+      : zoneId === 'obsidian_ruins'
+        ? { base: '#45445f', mid: '#5d617d', hi: '#8c82ba', crack: '#171527', moss: '#8b55ff' }
+        : zoneId === 'moonfen_marsh'
+          ? { base: '#34595c', mid: '#467479', hi: '#7ec8bd', crack: '#142a2c', moss: '#3ef0c0' }
+          : { base: '#5c5240', mid: '#7a6a49', hi: '#c39d54', crack: '#2f2518', moss: '#d9af52' };
+
     const c = document.createElement('canvas'); c.width = c.height = 256;
     const ctx = c.getContext('2d'); if (!ctx) return null;
-    ctx.fillStyle = '#9a948c'; ctx.fillRect(0, 0, 256, 256);
-    // mottled speckle noise
-    for (let i = 0; i < 3000; i++) {
-      const v = 70 + Math.floor(Math.random() * 120);
-      ctx.fillStyle = `rgba(${v},${v - 6},${v - 12},0.5)`;
-      const s = 1 + Math.random() * 3;
+    const bg = ctx.createLinearGradient(0, 0, 256, 256);
+    bg.addColorStop(0, palette.hi);
+    bg.addColorStop(0.42, palette.base);
+    bg.addColorStop(1, palette.mid);
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, 256, 256);
+
+    for (let i = 0; i < 3600; i++) {
+      const hot = Math.random() > 0.72;
+      const alpha = hot ? 0.16 : 0.1;
+      ctx.fillStyle = hot ? `rgba(255,244,195,${alpha})` : `rgba(12,10,8,${alpha})`;
+      const s = hot ? 1 + Math.random() * 2.2 : 1 + Math.random() * 4;
       ctx.fillRect(Math.random() * 256, Math.random() * 256, s, s);
     }
-    // cobble grout (offset rows)
-    ctx.strokeStyle = 'rgba(22,18,15,0.6)'; ctx.lineWidth = 2.4;
-    const cell = 64;
-    for (let gy = 0; gy <= 256; gy += cell) {
+
+    const cell = 44;
+    for (let gy = -cell; gy <= 256; gy += cell) {
       const off = ((gy / cell) % 2) ? cell / 2 : 0;
-      for (let gx = -cell; gx <= 256; gx += cell) ctx.strokeRect(gx + off, gy, cell, cell);
+      for (let gx = -cell; gx <= 256; gx += cell) {
+        const x = gx + off + Math.random() * 8;
+        const y = gy + Math.random() * 8;
+        const w = cell + (Math.random() - 0.5) * 12;
+        const h = cell * (0.72 + Math.random() * 0.32);
+        ctx.fillStyle = `rgba(255,235,180,${0.035 + Math.random() * 0.04})`;
+        ctx.fillRect(x + 3, y + 3, w - 7, h - 7);
+        ctx.strokeStyle = `rgba(12,9,8,${0.26 + Math.random() * 0.16})`;
+        ctx.lineWidth = 1.3 + Math.random() * 1.2;
+        ctx.strokeRect(x, y, w, h);
+      }
     }
-    // cracks
-    ctx.strokeStyle = 'rgba(8,6,4,0.55)'; ctx.lineWidth = 1.4;
-    for (let i = 0; i < 16; i++) {
+
+    ctx.strokeStyle = palette.crack; ctx.lineWidth = 1.15;
+    for (let i = 0; i < 24; i++) {
       ctx.beginPath();
       let x = Math.random() * 256, y = Math.random() * 256; ctx.moveTo(x, y);
-      for (let j = 0; j < 5; j++) { x += (Math.random() - 0.5) * 46; y += (Math.random() - 0.5) * 46; ctx.lineTo(x, y); }
+      for (let j = 0; j < 4; j++) { x += (Math.random() - 0.5) * 42; y += (Math.random() - 0.5) * 42; ctx.lineTo(x, y); }
       ctx.stroke();
     }
+
+    ctx.fillStyle = `${palette.moss}66`;
+    for (let i = 0; i < 34; i++) {
+      ctx.beginPath();
+      ctx.ellipse(Math.random() * 256, Math.random() * 256, 3 + Math.random() * 10, 1.5 + Math.random() * 5, Math.random() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = this.quality === 'high' ? 4 : 1;
+    tex.anisotropy = this.quality === 'high' ? 8 : 2;
     return tex;
   }
 
@@ -330,15 +369,15 @@ export class Game3D {
       const composer = new EffectComposer(this.renderer);
       composer.addPass(new RenderPass(this.scene, this.camera));
       const bloom = new UnrealBloomPass(
-        new THREE.Vector2(window.innerWidth, window.innerHeight), 0.8, 0.6, 0.6
+        new THREE.Vector2(window.innerWidth, window.innerHeight), 0.46, 0.42, 0.72
       );
       composer.addPass(bloom);
       composer.addPass(new OutputPass());
-      // Gothic vignette — darkens the corners for an ARPG mood.
+      // Light vignette for focus without hiding edge UI or terrain on phones.
       composer.addPass(new ShaderPass({
-        uniforms: { tDiffuse: { value: null }, strength: { value: 1.4 } },
+        uniforms: { tDiffuse: { value: null }, strength: { value: 0.82 } },
         vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-        fragmentShader: 'uniform sampler2D tDiffuse; uniform float strength; varying vec2 vUv; void main(){ vec4 c=texture2D(tDiffuse,vUv); vec2 d=vUv-0.5; float v=clamp(1.0-dot(d,d)*strength,0.0,1.0); v=pow(v,1.3); gl_FragColor=vec4(c.rgb*mix(0.42,1.0,v),c.a); }',
+        fragmentShader: 'uniform sampler2D tDiffuse; uniform float strength; varying vec2 vUv; void main(){ vec4 c=texture2D(tDiffuse,vUv); vec2 d=vUv-0.5; float v=clamp(1.0-dot(d,d)*strength,0.0,1.0); v=pow(v,1.15); gl_FragColor=vec4(c.rgb*mix(0.74,1.0,v),c.a); }',
       }));
       composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       composer.setSize(window.innerWidth, window.innerHeight);
@@ -355,11 +394,11 @@ export class Game3D {
     const c = document.createElement('canvas'); c.width = 16; c.height = 256;
     const ctx = c.getContext('2d')!;
     const grad = ctx.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0.0, '#0a1530');   // zenith — deep dusk
-    grad.addColorStop(0.36, '#22344f');
-    grad.addColorStop(0.5, '#8a755c');   // warm horizon haze
-    grad.addColorStop(0.62, '#46505d');
-    grad.addColorStop(1.0, '#1d232e');   // nadir
+    grad.addColorStop(0.0, '#132a4f');   // moonlit zenith
+    grad.addColorStop(0.34, '#315070');
+    grad.addColorStop(0.5, '#b39268');   // warm horizon haze
+    grad.addColorStop(0.66, '#547080');
+    grad.addColorStop(1.0, '#293747');   // nadir
     ctx.fillStyle = grad; ctx.fillRect(0, 0, 16, 256);
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
     const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, depthWrite: false });
@@ -378,7 +417,7 @@ export class Game3D {
     trunk.position.y = radius * 0.75; trunk.castShadow = hi; g.add(trunk);
     const canopy = new THREE.Group();
     const tint = new THREE.Color(accent).offsetHSL(0, -0.12, (Math.random() - 0.5) * 0.1);
-    const leafMat = new THREE.MeshStandardMaterial({ color: tint, roughness: 1, flatShading: true });
+    const leafMat = new THREE.MeshStandardMaterial({ color: tint.offsetHSL(0, 0.02, 0.08), emissive: new THREE.Color(accent).multiplyScalar(0.08), emissiveIntensity: 0.1, roughness: 0.96, flatShading: true });
     for (let i = 0; i < 3; i++) {
       const f = 1 - i / 3;
       const cone = new THREE.Mesh(new THREE.ConeGeometry(radius * (0.7 + f * 0.55), radius * 1.25, 7), leafMat);
@@ -394,7 +433,7 @@ export class Game3D {
 
   private makeRock(x: number, y: number, radius: number, hi: boolean): THREE.Group {
     const g = new THREE.Group();
-    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x6a7077, roughness: 1, flatShading: true });
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x858b91, roughness: 0.94, flatShading: true });
     const main = new THREE.Mesh(new THREE.IcosahedronGeometry(radius, 0), stoneMat);
     main.scale.set(1, 0.78 + Math.random() * 0.3, 1);
     main.position.y = radius * 0.45;
@@ -402,7 +441,7 @@ export class Game3D {
     main.castShadow = hi; main.receiveShadow = true; g.add(main);
     const cap = new THREE.Mesh(
       new THREE.IcosahedronGeometry(radius * 0.7, 0),
-      new THREE.MeshStandardMaterial({ color: 0x4a5d3a, roughness: 1, flatShading: true })
+      new THREE.MeshStandardMaterial({ color: 0x6d854e, roughness: 0.96, flatShading: true })
     );
     cap.position.y = radius * 0.92; cap.scale.y = 0.4; g.add(cap);
     const n = 2 + Math.floor(Math.random() * 2);
@@ -420,7 +459,7 @@ export class Game3D {
 
   private makeRuin(x: number, y: number, radius: number, hi: boolean): THREE.Group {
     const g = new THREE.Group();
-    const stone = new THREE.MeshStandardMaterial({ color: 0x4b4668, roughness: 0.92, flatShading: true });
+    const stone = new THREE.MeshStandardMaterial({ color: 0x6b668a, emissive: 0x17122a, emissiveIntensity: 0.12, roughness: 0.88, flatShading: true });
     const h = radius * 2.2 * (0.7 + Math.random() * 0.6);
     const col = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.5, radius * 0.62, h, 8), stone);
     col.position.y = h / 2; col.castShadow = hi; col.receiveShadow = true; g.add(col);
@@ -445,7 +484,7 @@ export class Game3D {
   private makeWater(x: number, y: number, radius: number): THREE.Mesh {
     const m = new THREE.Mesh(
       new THREE.CircleGeometry(radius, 32),
-      new THREE.MeshStandardMaterial({ color: 0x2f6f86, roughness: 0.14, metalness: 0.35, transparent: true, opacity: 0.85, emissive: 0x10333f, emissiveIntensity: 0.5 })
+      new THREE.MeshStandardMaterial({ color: 0x47a6b8, roughness: 0.12, metalness: 0.28, transparent: true, opacity: 0.88, emissive: 0x1b7080, emissiveIntensity: 0.38 })
     );
     m.rotation.x = -Math.PI / 2; m.position.set(x, 1.2, y); m.receiveShadow = true;
     this.waterMeshes.push(m);
@@ -543,11 +582,18 @@ export class Game3D {
   private createPlayerMesh(classKey: string, isLocal: boolean): THREE.Group {
     const color = CLASS_COLORS[classKey] ?? 0xffffff;
     const g = new THREE.Group();
-    const main = new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.05, flatShading: true });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x1c150e, roughness: 0.86, flatShading: true });
-    const bone = new THREE.MeshStandardMaterial({ color: 0xd8c28a, roughness: 0.72, flatShading: true });
-    const metal = new THREE.MeshStandardMaterial({ color: 0xc2d2dd, roughness: 0.4, metalness: 0.5, flatShading: true });
-    const accent = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.1, roughness: 0.35, flatShading: true });
+    const main = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(color).offsetHSL(0, 0.04, 0.08),
+      emissive: new THREE.Color(color).multiplyScalar(0.2),
+      emissiveIntensity: isLocal ? 0.34 : 0.2,
+      roughness: 0.62,
+      metalness: 0.04,
+      flatShading: true,
+    });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x302418, roughness: 0.82, flatShading: true });
+    const bone = new THREE.MeshStandardMaterial({ color: 0xf0dca4, emissive: 0x3b2c12, emissiveIntensity: 0.12, roughness: 0.66, flatShading: true });
+    const metal = new THREE.MeshStandardMaterial({ color: 0xd9e8ef, roughness: 0.36, metalness: 0.45, flatShading: true });
+    const accent = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.45, roughness: 0.3, flatShading: true });
 
     const rig: Rig = { phase: Math.random() * Math.PI * 2, stride: 0, attack: 0 };
 
@@ -673,15 +719,15 @@ export class Game3D {
         g.add(mote);
       }
       g.add(core, flame, halo);
-      const light = new THREE.PointLight(color, 0.6, 160); light.position.y = 36; g.add(light);
+      const light = new THREE.PointLight(color, 0.9, 210); light.position.y = 36; g.add(light);
     } else if (type === 'bramble_beast') {
-      const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 1, flatShading: true });
+      const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).offsetHSL(0, 0.06, 0.12), emissive: 0x233915, emissiveIntensity: 0.16, roughness: 0.94, flatShading: true });
       const body = new THREE.Mesh(new THREE.DodecahedronGeometry(24, 0), bodyMat);
       body.scale.set(1.35, 0.9, 1.05);
       body.position.y = 23; body.castShadow = true; g.add(body);
       const head = new THREE.Mesh(new THREE.DodecahedronGeometry(14, 0), bodyMat);
       head.position.set(18, 28, 8); head.castShadow = true; g.add(head);
-      const thornMat = new THREE.MeshStandardMaterial({ color: 0x3e5a23, roughness: 1, flatShading: true });
+      const thornMat = new THREE.MeshStandardMaterial({ color: 0x6d8f2f, emissive: 0x263f12, emissiveIntensity: 0.18, roughness: 1, flatShading: true });
       for (let i = 0; i < 11; i++) {
         const th = new THREE.Mesh(new THREE.ConeGeometry(4, 20, 5), thornMat);
         const a = (i / 11) * Math.PI * 2;
@@ -693,7 +739,7 @@ export class Game3D {
         horn.position.set(24, 39, side * 8); horn.rotation.set(0, 0, -0.9); g.add(horn);
       }
     } else {
-      const bodyMat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.3, roughness: 0.5, flatShading: true });
+      const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).offsetHSL(0, 0.04, 0.08), emissive: color, emissiveIntensity: 0.48, roughness: 0.46, flatShading: true });
       const body = new THREE.Mesh(new THREE.TetrahedronGeometry(15, 0), bodyMat);
       body.position.y = 18; body.castShadow = true;
       const eyes = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 10), new THREE.MeshStandardMaterial({ color: 0xfff2a8, emissive: 0xffd24a, emissiveIntensity: 0.8 }));
@@ -717,10 +763,10 @@ export class Game3D {
 
   private createUnitMesh(ownerIsLocal: boolean): THREE.Group {
     const g = new THREE.Group();
-    const clothColor = ownerIsLocal ? 0xd6b36a : 0x8fa8c8;
-    const cloth = new THREE.MeshStandardMaterial({ color: clothColor, roughness: 0.8, flatShading: true });
-    const leather = new THREE.MeshStandardMaterial({ color: 0x3b2b1d, roughness: 0.92, flatShading: true });
-    const metal = new THREE.MeshStandardMaterial({ color: 0xb8b2a0, roughness: 0.45, metalness: 0.35, flatShading: true });
+    const clothColor = ownerIsLocal ? 0xf0c96f : 0x9fc5eb;
+    const cloth = new THREE.MeshStandardMaterial({ color: clothColor, emissive: clothColor, emissiveIntensity: 0.12, roughness: 0.72, flatShading: true });
+    const leather = new THREE.MeshStandardMaterial({ color: 0x5a3f26, roughness: 0.86, flatShading: true });
+    const metal = new THREE.MeshStandardMaterial({ color: 0xd8d1b9, roughness: 0.38, metalness: 0.34, flatShading: true });
 
     const body = new THREE.Mesh(new THREE.CapsuleGeometry(7, 16, 4, 10), cloth);
     body.position.y = 20; body.castShadow = true;
@@ -754,14 +800,14 @@ export class Game3D {
       stump.position.y = 3; g.add(stump);
       const trunk = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 7.5, 32, 7), new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 1, flatShading: true }));
       trunk.position.y = 20; trunk.castShadow = true; g.add(trunk);
-      const leafMat = new THREE.MeshStandardMaterial({ color: 0x4f9e57, roughness: 1, flatShading: true });
+      const leafMat = new THREE.MeshStandardMaterial({ color: 0x66bd5b, emissive: 0x1b4a24, emissiveIntensity: 0.12, roughness: 0.96, flatShading: true });
       for (let i = 0; i < 2; i++) {
         const leaf = new THREE.Mesh(new THREE.ConeGeometry(20 - i * 5, 30, 7), leafMat);
         leaf.position.y = 40 + i * 12; leaf.castShadow = true; g.add(leaf);
       }
     } else if (type === 'stone') {
       // ore boulder (minar)
-      const rockMat = new THREE.MeshStandardMaterial({ color: info.color, roughness: 1, flatShading: true });
+      const rockMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(info.color).offsetHSL(0, -0.02, 0.1), roughness: 0.94, flatShading: true });
       const main = new THREE.Mesh(new THREE.DodecahedronGeometry(15, 0), rockMat);
       main.position.y = 12; main.scale.set(1.1, 0.9, 1); main.castShadow = true; g.add(main);
       for (let i = 0; i < 3; i++) {
@@ -935,6 +981,12 @@ export class Game3D {
       const isLocal = id === this.localId;
       const group = this.createPlayerMesh(p.classKey, isLocal);
       group.position.set(p.x, 0, p.y);
+      if (isLocal) {
+        // Hero torch: a warm pool of light that travels with you (Diablo mood).
+        const torch = new THREE.PointLight(0xffb46a, 1.9, 340, 1.6);
+        torch.position.set(0, 62, 0);
+        group.add(torch);
+      }
       const rig = group.userData.rig as Rig | undefined;
       const label = this.makeLabel();
       label.sprite.position.set(0, 66, 0);
@@ -1073,7 +1125,11 @@ export class Game3D {
       }
     });
     this.room.onMessage(MSG.BUILD_DENIED, (d: { reason: string }) => this.showToast(`✗ ${d.reason}`));
-    this.room.onMessage(MSG.LEVEL_UP, (d: { level: number }) => { this.showToast(`⭐ ¡Nivel ${d.level}!`); this.setObjective('level', d.level); });
+    this.room.onMessage(MSG.LEVEL_UP, (d: { level: number }) => {
+      this.showToast(`⭐ ¡Nivel ${d.level}! +1 punto de mejora — pulsa C`);
+      this.setObjective('level', d.level);
+      if (this.charOpen) this.renderCharPanel();
+    });
     this.room.onMessage(MSG.MATCH_END, () => { /* realm: no end */ });
     this.room.onLeave(() => {
       this.connectionStatus = this.intentionalExit ? 'Saliendo' : 'Desconectado';
@@ -1249,6 +1305,8 @@ export class Game3D {
     this.keys[code] = down;
     if (!down) return;
     if (code === 'Escape' && this.settingsOpen) this.closeSettings();
+    else if (code === 'Escape' && this.charOpen) this.toggleCharPanel();
+    else if (code === 'KeyC') this.toggleCharPanel();
     else if (code === 'KeyF') this.tryHarvest();
     else if (code === 'KeyB') this.toggleBuildMenu();
     else if (code === 'KeyV') this.toggleCamera();
@@ -1304,12 +1362,14 @@ export class Game3D {
     if (this.queuedAbility) { abilityKey = this.queuedAbility; this.queuedAbility = null; }
     else if (this.keys['KeyJ'] || this.keys['Space']) abilityKey = 'basic';
     else if (this.keys['KeyQ']) abilityKey = 'q';
+    else if (this.keys['KeyE']) abilityKey = 'e';
     else if (this.keys['KeyR']) abilityKey = 'r';
 
     if (dx === 0 && dy === 0 && abilityKey === null) return null;
     if (abilityKey) { const me = this.players.get(this.localId); if (me?.rig) me.rig.attack = 1; }
-    // Abilities auto-aim the nearest foe (no cursor aiming in click-to-move mode).
-    const aim = abilityKey ? this.autoAim() : this.aim;
+    // Damage abilities auto-aim the nearest foe; movement abilities (E: blink/
+    // dash/leap) head to the cursor / last tap instead.
+    const aim = abilityKey === 'e' ? this.aim : abilityKey ? this.autoAim() : this.aim;
     return { seq: this.seq++, dx, dy, abilityKey, aimX: aim.x, aimY: aim.z, timestamp: Date.now() };
   }
 
@@ -1493,9 +1553,20 @@ export class Game3D {
       this.animateRig(e, dt, time);
     });
     this.enemies.forEach((e) => {
+      const oldX = e.group.position.x;
+      const oldZ = e.group.position.z;
       e.group.position.lerp(e.target, 1 - Math.pow(0.0006, dt));
+      const dx = e.group.position.x - oldX;
+      const dz = e.group.position.z - oldZ;
+      if (Math.hypot(dx, dz) > 0.03) e.faceTarget = Math.atan2(dx, dz);
       if (e.bob !== undefined) { e.bob += dt * 3; e.group.position.y = e.type === 'wisp' ? Math.sin(e.bob) * 6 + 4 : Math.sin(e.bob) * 2; }
-      e.group.rotation.y += dt * (e.type === 'rune_imp' ? 1.4 : 0.5);
+      const pulse = 1 + Math.sin(time * (e.type === 'bramble_beast' ? 3.2 : 5.2) + e.group.position.x * 0.02) * 0.035;
+      e.group.scale.set(pulse, pulse, pulse);
+      if (e.type === 'rune_imp') {
+        e.group.rotation.y += dt * 1.15;
+      } else {
+        e.group.rotation.y = lerpAngle(e.group.rotation.y, e.faceTarget, 1 - Math.pow(0.0012, dt));
+      }
     });
     this.units.forEach((e) => {
       const old = e.group.position.clone();
@@ -1589,8 +1660,8 @@ export class Game3D {
     el.innerHTML = `
       <style>
         #game-hud3d { position:absolute; inset:0; pointer-events:none; font-family:'Segoe UI',system-ui,sans-serif; color:#fff; }
-        #game-hud3d .panel { position:absolute; top:10px; left:10px; background:rgba(10,16,26,0.55);
-          border:1px solid rgba(255,255,255,0.14); border-radius:10px; padding:8px 12px; backdrop-filter:blur(5px); min-width:236px; }
+        #game-hud3d .panel { position:absolute; top:10px; left:10px; background:rgba(14,11,8,0.62);
+          border:1px solid rgba(255,216,138,0.26); border-radius:10px; padding:8px 12px; backdrop-filter:blur(5px); min-width:236px; }
         #game-hud3d .meta { display:grid; grid-template-columns:auto auto; gap:1px 10px; margin-bottom:7px; font-size:11px; }
         #game-hud3d .meta span:nth-child(odd){opacity:.6} #game-hud3d .meta span:nth-child(even){text-align:right}
         #game-hud3d .bar-row{display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px}
@@ -1601,7 +1672,7 @@ export class Game3D {
         #game-hud3d .val{font-size:10px;min-width:46px;text-align:right}
         #game-hud3d .res{display:flex;gap:10px;margin-top:7px;font-size:13px}
         #game-hud3d .res b{font-weight:700}
-        #game-hud3d #obj3d{position:absolute;top:10px;right:10px;background:rgba(10,16,26,.55);border:1px solid rgba(255,255,255,.14);
+        #game-hud3d #obj3d{position:absolute;top:10px;right:10px;background:rgba(14,11,8,.62);border:1px solid rgba(255,216,138,.26);
           border-radius:10px;padding:9px 12px;backdrop-filter:blur(5px);min-width:210px;max-width:250px}
         #game-hud3d #obj3d h4{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#ffd76a;margin-bottom:5px}
         #game-hud3d #obj3d ul{list-style:none;font-size:12px;line-height:1.45}
@@ -1621,12 +1692,59 @@ export class Game3D {
           color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer}
         #game-hud3d #respawn3d{position:absolute;top:44%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.78);
           color:#ff6b6b;border:2px solid #ff5252;border-radius:12px;padding:16px 30px;font-weight:bold;text-align:center;display:none}
-        #game-hud3d #build3d{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:none;flex-wrap:wrap;justify-content:center;gap:8px;max-width:min(620px,96vw);pointer-events:auto}
+        #game-hud3d #build3d{position:absolute;bottom:86px;left:50%;transform:translateX(-50%);display:none;flex-wrap:wrap;justify-content:center;gap:8px;max-width:min(620px,96vw);pointer-events:auto}
         #game-hud3d #build3d button{background:rgba(10,16,26,.85);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:8px;
           padding:8px 12px;font-size:12px;cursor:pointer;text-align:center;min-width:120px}
         #game-hud3d #buildbtn3d{position:absolute;bottom:14px;left:12px;pointer-events:auto;background:rgba(10,16,26,.7);color:#fff;
           border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer}
-        #game-hud3d .controls{position:absolute;bottom:90px;left:12px;font-size:10px;color:rgba(255,255,255,.55)}
+        #game-hud3d #charbtn3d{position:absolute;bottom:90px;left:12px;pointer-events:auto;background:rgba(10,16,26,.7);color:#ffd98a;
+          border:1px solid rgba(255,216,138,.4);border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer}
+        #game-hud3d #charbtn3d.pts{animation:perkPulse 1.4s ease-in-out infinite}
+        @keyframes perkPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,216,138,0)}50%{box-shadow:0 0 16px 2px rgba(255,216,138,.55)}}
+        #game-hud3d #abar3d{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;gap:8px;pointer-events:auto}
+        #game-hud3d #abar3d .slot{position:relative;width:62px;height:62px;border-radius:10px;cursor:pointer;overflow:hidden;
+          border:1px solid rgba(255,216,138,.35);background:linear-gradient(180deg,rgba(24,20,14,.9),rgba(12,10,8,.94));
+          color:#f0e6cf;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Cinzel',Georgia,serif}
+        #game-hud3d #abar3d .slot:hover{border-color:rgba(255,216,138,.85)}
+        #game-hud3d #abar3d .slot .ic{font-size:19px;line-height:1}
+        #game-hud3d #abar3d .slot .nm{font-size:7.5px;letter-spacing:.3px;opacity:.85;margin-top:3px;text-align:center;padding:0 2px}
+        #game-hud3d #abar3d .slot .key{position:absolute;top:2px;left:5px;font-size:9px;color:#ffd98a;font-weight:700}
+        #game-hud3d #abar3d .slot .cost{position:absolute;top:2px;right:5px;font-size:9px;color:#7fd4ff}
+        #game-hud3d #abar3d .slot .cd{position:absolute;left:0;bottom:0;width:100%;height:0%;background:rgba(5,7,12,.82);pointer-events:none}
+        #game-hud3d #abar3d .slot .cdt{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+          font-size:15px;font-weight:800;color:#ffd98a;text-shadow:0 1px 4px #000;pointer-events:none}
+        #game-hud3d #abar3d .slot.noen{filter:saturate(.25) brightness(.65)}
+        #charpanel3d{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+          background:rgba(3,6,10,.62);backdrop-filter:blur(5px);pointer-events:auto;z-index:6}
+        #charpanel3d .card{width:min(540px,calc(100vw - 24px));max-height:86vh;overflow-y:auto;
+          background:linear-gradient(165deg,rgba(22,18,12,.97),rgba(10,9,8,.97));border:1px solid rgba(255,216,138,.4);
+          border-radius:14px;padding:18px 20px;font-family:'Cinzel',Georgia,serif;color:#efe4cb;box-shadow:0 24px 80px rgba(0,0,0,.7)}
+        #charpanel3d h3{color:#ffd98a;font-family:'Cinzel Decorative','Cinzel',serif;font-size:20px;margin-bottom:2px}
+        #charpanel3d .sub{font-size:11px;letter-spacing:2px;color:#b9a777;text-transform:uppercase;margin-bottom:12px}
+        #charpanel3d .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:6px}
+        #charpanel3d .stat{background:rgba(255,216,138,.06);border:1px solid rgba(255,216,138,.18);border-radius:8px;padding:7px 6px;text-align:center}
+        #charpanel3d .stat b{display:block;font-size:15px;color:#ffe6ad}
+        #charpanel3d .stat span{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#9c8e6e}
+        #charpanel3d .sect{font-size:11px;letter-spacing:2px;color:#ffd98a;text-transform:uppercase;margin:13px 0 7px;
+          border-bottom:1px solid rgba(255,216,138,.2);padding-bottom:3px}
+        #charpanel3d .perks{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+        #charpanel3d .perk{background:rgba(255,255,255,.04);border:1px solid rgba(255,216,138,.25);border-radius:9px;
+          padding:9px;cursor:pointer;color:#efe4cb;text-align:left;font-family:inherit}
+        #charpanel3d .perk:hover:not([disabled]){border-color:#ffd98a;background:rgba(255,216,138,.1)}
+        #charpanel3d .perk b{display:block;font-size:13px;color:#ffe6ad}
+        #charpanel3d .perk span{font-size:10px;color:#a99a78}
+        #charpanel3d .perk[disabled]{opacity:.4;cursor:default}
+        #charpanel3d .ab{display:flex;gap:10px;align-items:center;background:rgba(255,255,255,.03);
+          border:1px solid rgba(255,255,255,.08);border-radius:9px;padding:7px 10px;margin-bottom:6px}
+        #charpanel3d .ab .k{width:26px;height:26px;border-radius:6px;background:rgba(255,216,138,.14);
+          border:1px solid rgba(255,216,138,.4);display:flex;align-items:center;justify-content:center;
+          color:#ffd98a;font-weight:700;font-size:12px;flex:none}
+        #charpanel3d .ab .inf{flex:1}
+        #charpanel3d .ab .inf b{font-size:13px;color:#f5ead0}
+        #charpanel3d .ab .inf span{display:block;font-size:10px;color:#9c8e6e}
+        #charpanel3d .close{width:100%;margin-top:12px;padding:10px;border-radius:9px;border:1px solid rgba(255,216,138,.4);
+          background:rgba(255,216,138,.12);color:#ffd98a;font-family:inherit;font-size:13px;cursor:pointer;letter-spacing:1px}
+        #game-hud3d .controls{position:absolute;bottom:130px;left:12px;font-size:10px;color:rgba(255,255,255,.55)}
         #settingsmenu3d{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(3,7,12,.58);backdrop-filter:blur(6px);pointer-events:auto}
         #settingsmenu3d .settings-card{width:min(360px,calc(100vw - 28px));background:rgba(10,16,26,.94);border:1px solid rgba(255,255,255,.18);border-radius:12px;padding:16px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
         #settingsmenu3d h3{font-size:17px;margin-bottom:4px;color:#ffe08a}
@@ -1645,6 +1763,8 @@ export class Game3D {
           #game-hud3d #settingsbtn3d{top:calc(env(safe-area-inset-top,0px) + 8px);right:8px;padding:7px 10px;font-size:12px;background:rgba(10,16,26,.74)}
           #game-hud3d #cambtn3d{top:calc(env(safe-area-inset-top,0px) + 50px);right:8px;left:auto;bottom:auto;padding:7px 10px;font-size:12px;background:rgba(10,16,26,.74)}
           #game-hud3d #buildbtn3d{top:calc(env(safe-area-inset-top,0px) + 92px);right:8px;left:auto;bottom:auto;padding:7px 10px;font-size:12px;background:rgba(10,16,26,.74)}
+          #game-hud3d #charbtn3d{top:calc(env(safe-area-inset-top,0px) + 134px);right:8px;left:auto;bottom:auto;padding:7px 10px;font-size:12px;background:rgba(10,16,26,.74)}
+          #game-hud3d #abar3d{display:none}
           #game-hud3d #mini3d{top:calc(env(safe-area-inset-top,0px) + 92px);left:8px;right:auto;bottom:auto;width:104px;height:80px;opacity:.8}
           #game-hud3d #build3d{bottom:calc(env(safe-area-inset-bottom,0px) + 128px);left:50%;right:auto;transform:translateX(-50%);max-width:calc(100vw - 18px)}
           #game-hud3d #build3d button{min-width:108px;padding:9px 10px}
@@ -1661,6 +1781,7 @@ export class Game3D {
           <span>Jugadores</span><span id="players3d">1</span>
           <span>Zona</span><span id="zonelbl3d">Santuario</span>
           <span>Estado</span><span id="conn3d">Conectado</span>
+          <span>Amenaza</span><span id="threat3d" style="color:#ff9a6a">I</span>
         </div>
         <div class="bar-row"><span>HP</span><div class="bar-bg"><div class="fill hp" id="hp3d" style="width:100%"></div></div><span class="val" id="hpv3d">100/100</span></div>
         <div class="bar-row"><span>EN</span><div class="bar-bg"><div class="fill en" id="en3d" style="width:100%"></div></div><span class="val" id="env3d">100/100</span></div>
@@ -1670,7 +1791,7 @@ export class Game3D {
           <span>🪨 <b id="r-stone">0</b></span><span>◈ <b id="r-rune">0</b></span>
         </div>
       </div>
-      <div id="obj3d"><h4>Objetivos</h4><ul id="objlist3d"></ul></div>
+      <div id="obj3d"><h4 id="objhdr3d">Objetivos</h4><ul id="objlist3d"></ul></div>
       <div id="zone3d"></div>
       <div id="toast3d"></div>
       <div id="hint3d"></div>
@@ -1679,6 +1800,9 @@ export class Game3D {
       <button id="back3d">← Volver al campamento</button>
       <button id="settingsbtn3d">Ajustes</button>
       <button id="cambtn3d">🎥 Vista</button>
+      <button id="charbtn3d">👤 Héroe (C)</button>
+      <div id="abar3d"></div>
+      <div id="charpanel3d"><div class="card" id="charcard3d"></div></div>
       <button id="buildbtn3d">🔨 Construir (B)</button>
       <div id="build3d">
         <button data-build="campfire">🔥 Hoguera<br><small>3🪵 2✦</small></button>
@@ -1709,6 +1833,11 @@ export class Game3D {
     backButton?.addEventListener('click', () => this.leaveToLobby());
     document.getElementById('settingsbtn3d')?.addEventListener('click', () => this.openSettings());
     document.getElementById('cambtn3d')?.addEventListener('click', () => this.toggleCamera());
+    document.getElementById('charbtn3d')?.addEventListener('click', () => this.toggleCharPanel());
+    document.getElementById('charpanel3d')?.addEventListener('click', (e) => {
+      if (e.target === document.getElementById('charpanel3d')) this.toggleCharPanel();
+    });
+    this.buildActionBar();
     document.getElementById('buildbtn3d')!.addEventListener('click', () => this.toggleBuildMenu());
     document.getElementById('closeSettings3d')!.addEventListener('click', () => this.closeSettings());
     document.getElementById('leaveGame3d')!.addEventListener('click', () => this.leaveToLobby());
@@ -1717,6 +1846,127 @@ export class Game3D {
     el.querySelectorAll<HTMLElement>('#build3d button').forEach((b) => {
       b.addEventListener('click', () => this.selectBuild(b.dataset.build as StructureType));
     });
+  }
+
+  // ---- action bar + hero panel ----------------------------------------------
+
+  private buildActionBar() {
+    const bar = document.getElementById('abar3d');
+    if (!bar) return;
+    const def = CLASS_DEFINITIONS[this.session.classKey as PlayerClass];
+    if (!def) return;
+    const slots: Array<{ k: 'basic' | 'q' | 'e' | 'r'; ic: string; nm: string; key: string; cost: number }> = [
+      { k: 'basic', ic: '⚔️', nm: 'Ataque', key: 'J', cost: 0 },
+      { k: 'q', ic: '✦', nm: def.abilities.q.nameEs, key: 'Q', cost: def.abilities.q.energyCost },
+      { k: 'e', ic: '◆', nm: def.abilities.e.nameEs, key: 'E', cost: def.abilities.e.energyCost },
+      { k: 'r', ic: '✸', nm: def.abilities.r.nameEs, key: 'R', cost: def.abilities.r.energyCost },
+    ];
+    bar.innerHTML = slots.map((s) => `
+      <div class="slot" data-slot="${s.k}">
+        <span class="key">${s.key}</span>${s.cost ? `<span class="cost">${s.cost}</span>` : ''}
+        <span class="ic">${s.ic}</span><span class="nm">${s.nm}</span>
+        <div class="cd" data-cd="${s.k}"></div><div class="cdt" data-cdt="${s.k}"></div>
+      </div>`).join('');
+    bar.querySelectorAll<HTMLElement>('.slot').forEach((el) => {
+      el.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        const k = el.dataset.slot as AbilityKey;
+        if (k === 'basic') this.queueBasicAttack(); else this.queuedAbility = k;
+      });
+    });
+  }
+
+  private abilityCooldownMs(k: 'basic' | 'q' | 'e' | 'r', classKey: string): number {
+    const def = CLASS_DEFINITIONS[classKey as PlayerClass];
+    if (!def) return 0;
+    return k === 'basic' ? def.stats.attackCooldownMs : def.abilities[k].cooldownMs;
+  }
+
+  private updateActionBar(me: { classKey: string; energy: number; cooldowns?: Record<string, number> } | undefined) {
+    const bar = document.getElementById('abar3d');
+    if (!bar || !me) return;
+    const def = CLASS_DEFINITIONS[me.classKey as PlayerClass];
+    if (!def) return;
+    const now = Date.now();
+    (['basic', 'q', 'e', 'r'] as const).forEach((k) => {
+      const cdEl = bar.querySelector<HTMLElement>(`[data-cd="${k}"]`);
+      const cdt = bar.querySelector<HTMLElement>(`[data-cdt="${k}"]`);
+      const slot = bar.querySelector<HTMLElement>(`[data-slot="${k}"]`);
+      if (!cdEl || !cdt || !slot) return;
+      const total = this.abilityCooldownMs(k, me.classKey);
+      const since = now - ((me.cooldowns?.[k] as number) ?? 0);
+      const remain = Math.max(0, total - since);
+      if (remain > 250 && since >= 0 && since < 86400000) {
+        cdEl.style.height = `${(remain / total) * 100}%`;
+        cdt.style.display = 'flex';
+        cdt.textContent = remain > 950 ? String(Math.ceil(remain / 1000)) : '';
+      } else {
+        cdEl.style.height = '0%';
+        cdt.style.display = 'none';
+      }
+      const cost = k === 'basic' ? 0 : def.abilities[k].energyCost;
+      slot.classList.toggle('noen', me.energy < cost);
+    });
+  }
+
+  private toggleCharPanel() {
+    this.charOpen = !this.charOpen;
+    const panel = document.getElementById('charpanel3d');
+    if (!panel) return;
+    panel.style.display = this.charOpen ? 'flex' : 'none';
+    if (this.charOpen) this.renderCharPanel();
+  }
+
+  private renderCharPanel() {
+    const card = document.getElementById('charcard3d');
+    if (!card) return;
+    const state = this.room.state as RealmRoomState;
+    const me = state.players?.get(this.localId);
+    if (!me) return;
+    const def = CLASS_DEFINITIONS[me.classKey as PlayerClass];
+    const pts = me.perkPoints ?? 0;
+    const perks = [
+      { id: 'vigor', icon: '❤️', name: 'Vigor', desc: '+25 vida máxima' },
+      { id: 'furia', icon: '🗡️', name: 'Furia', desc: '+4 daño de ataque' },
+      { id: 'celeridad', icon: '🌀', name: 'Celeridad', desc: '+8% velocidad de movimiento' },
+      { id: 'foco', icon: '🔮', name: 'Foco', desc: '+20 energía máxima' },
+    ];
+    const abilities = def ? ([['J', { nameEs: 'Ataque básico', energyCost: 0, cooldownMs: def.stats.attackCooldownMs, damage: def.stats.attackDamage }] as const,
+      ['Q', def.abilities.q] as const, ['E', def.abilities.e] as const, ['R', def.abilities.r] as const]) : [];
+    card.innerHTML = `
+      <h3>${me.alias}</h3>
+      <div class="sub">${def?.nameEs ?? me.classKey} · Nivel ${me.level} · ${me.xp} XP</div>
+      <div class="grid">
+        <div class="stat"><b>${Math.ceil(me.hp)}/${me.maxHp}</b><span>Vida</span></div>
+        <div class="stat"><b>${Math.ceil(me.energy)}/${me.maxEnergy}</b><span>Energía</span></div>
+        <div class="stat"><b>${me.attackDamage}</b><span>Daño</span></div>
+        <div class="stat"><b>${me.moveSpeed}</b><span>Velocidad</span></div>
+      </div>
+      <div class="sect">Mejoras ${pts > 0 ? `— <span style="color:#ffe6ad">${pts} punto${pts > 1 ? 's' : ''} disponible${pts > 1 ? 's' : ''}</span>` : '— sube de nivel para ganar puntos'}</div>
+      <div class="perks">
+        ${perks.map((p) => `<button class="perk" data-perk="${p.id}" ${pts <= 0 ? 'disabled' : ''}><b>${p.icon} ${p.name}</b><span>${p.desc}</span></button>`).join('')}
+      </div>
+      <div class="sect">Habilidades</div>
+      ${abilities.map(([key, a]) => `
+        <div class="ab"><div class="k">${key}</div><div class="inf"><b>${(a as { nameEs: string }).nameEs}</b>
+          <span>${(a as { damage: number }).damage ? `Daño ${(a as { damage: number }).damage} · ` : ''}${(a as { energyCost: number }).energyCost ? `Coste ${(a as { energyCost: number }).energyCost} EN · ` : ''}Recarga ${(((a as { cooldownMs: number }).cooldownMs) / 1000).toFixed(1)}s</span>
+        </div></div>`).join('')}
+      <div class="sect">Reino</div>
+      <div style="font-size:11px;color:#a99a78;line-height:1.6">
+        Era ${romanNumeral(this.objectiveTier + 1)} · Amenaza ${romanNumeral(threatTier(state.elapsedMs ?? 0) + 1)} ·
+        Construcciones: <b style="color:#ffe6ad">${countMap(state.structures)}</b> ·
+        Soldados: <b style="color:#ffe6ad">${countMap(state.units)}</b>
+      </div>
+      <button class="close" id="charclose3d">Volver al combate (C)</button>
+    `;
+    card.querySelectorAll<HTMLElement>('.perk').forEach((b) => {
+      b.addEventListener('click', () => {
+        const perk = b.dataset.perk!;
+        this.room.send(MSG.PERK_CHOICE, { perk });
+        window.setTimeout(() => { if (this.charOpen) this.renderCharPanel(); }, 150);
+      });
+    });
+    document.getElementById('charclose3d')?.addEventListener('click', () => this.toggleCharPanel());
   }
 
   private openSettings(message?: string) {
@@ -1766,6 +2016,12 @@ export class Game3D {
   }
 
   private renderObjectives() {
+    const hdr = document.getElementById('objhdr3d');
+    if (hdr) {
+      const eraNames = ['El Despertar', 'La Corrupción', 'El Asedio', 'La Reconquista', 'El Dominio'];
+      const name = eraNames[Math.min(this.objectiveTier, eraNames.length - 1)];
+      hdr.textContent = `Era ${romanNumeral(this.objectiveTier + 1)} · ${name}`;
+    }
     const ul = document.getElementById('objlist3d');
     if (!ul) return;
     ul.innerHTML = this.objectives.map((o) => {
@@ -1802,6 +2058,23 @@ export class Game3D {
     set('r-essence', String(me.essence ?? 0)); set('r-wood', String(me.wood ?? 0));
     set('r-stone', String(me.stone ?? 0)); set('r-rune', String(me.runeShard ?? 0));
     const resp = document.getElementById('respawn3d'); if (resp) resp.style.display = me.isAlive ? 'none' : 'block';
+
+    // Threat ("la máquina") — derived from elapsedMs on both sides.
+    const tTier = threatTier(state.elapsedMs ?? 0);
+    set('threat3d', romanNumeral(tTier + 1));
+    if (tTier > this.lastThreatTier) {
+      this.lastThreatTier = tTier;
+      this.showToast(`☠️ La corrupción se intensifica — Amenaza ${romanNumeral(tTier + 1)}`);
+    }
+
+    // Action bar cooldowns + perk badge
+    this.updateActionBar(me as unknown as { classKey: string; energy: number; cooldowns?: Record<string, number> });
+    const cb = document.getElementById('charbtn3d');
+    if (cb) {
+      const pts = me.perkPoints ?? 0;
+      cb.classList.toggle('pts', pts > 0);
+      cb.textContent = pts > 0 ? `👤 Héroe (C) · ${pts}⬆` : '👤 Héroe (C)';
+    }
 
     // interaction hint
     const hint = document.getElementById('hint3d');
@@ -1866,6 +2139,8 @@ export class Game3D {
         #ab3d button::before{font-size:21px;line-height:1}
         #ab3d button::after{font-size:9px;font-weight:700;opacity:.88;margin-top:2px;letter-spacing:.3px}
         #ab3d button[data-ab="q"]::before{content:"✦"} #ab3d button[data-ab="q"]::after{content:"Habilidad"}
+        #ab3d button[data-ab="e"]{background:rgba(64,150,190,.62)}
+        #ab3d button[data-ab="e"]::before{content:"◆"} #ab3d button[data-ab="e"]::after{content:"Destreza"}
         #ab3d button[data-ab="r"]::before{content:"✸"} #ab3d button[data-ab="r"]::after{content:"Especial"}
         #ab3d button[data-ab="basic"]::before{content:"⚔️"} #ab3d button[data-ab="basic"]::after{content:"Atacar"}
         #ab3d button[data-act="harvest"]::before{content:"✋"} #ab3d button[data-act="harvest"]::after{content:"Coger"}
@@ -1874,7 +2149,8 @@ export class Game3D {
       <div id="joy3d"><div id="joythumb3d"></div></div>
       <div id="ab3d">
         <button data-ab="q">Q</button><button class="basic" data-ab="basic">⚔</button>
-        <button data-ab="r">R</button><button class="harv" data-act="harvest">✋</button>
+        <button data-ab="e">E</button><button data-ab="r">R</button>
+        <button class="harv" data-act="harvest">✋</button>
       </div>`;
     overlay.appendChild(wrap);
     this.touchEl = wrap;
@@ -1948,6 +2224,15 @@ function className(classKey: string): string {
 }
 function countPlayers(state: RealmRoomState): number {
   let count = 0; state.players?.forEach(() => { count += 1; }); return count;
+}
+function countMap(m: { forEach: (cb: (v: unknown, k: string) => void) => void } | undefined): number {
+  let count = 0; m?.forEach(() => { count += 1; }); return count;
+}
+function romanNumeral(n: number): string {
+  const table: Array<[number, string]> = [[10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']];
+  let out = ''; let v = Math.max(1, Math.floor(n));
+  for (const [num, sym] of table) { while (v >= num) { out += sym; v -= num; } }
+  return out;
 }
 function disposeSingleMesh(mesh: THREE.Mesh) {
   mesh.geometry.dispose();
