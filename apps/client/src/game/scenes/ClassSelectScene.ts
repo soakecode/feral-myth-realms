@@ -102,7 +102,7 @@ export class ClassSelectScene extends Phaser.Scene {
           font-family:'Segoe UI',system-ui,sans-serif;
           color:#fff; padding:18px; box-sizing:border-box;
         }
-        #class-select h2 { font-family:Georgia,serif; font-size:clamp(22px,4vw,34px); color:#f0d48a; margin:4px 0 18px; letter-spacing:1px; text-shadow:0 3px 18px #000; }
+        #class-select h2 { font-family:'Cinzel Decorative','Cinzel',Georgia,serif; font-size:clamp(22px,4vw,34px); color:#ffd98a; margin:4px 0 18px; letter-spacing:1px; text-shadow:0 0 22px rgba(255,200,90,.4),0 3px 18px #000; }
         .class-grid {
           display:grid; grid-template-columns:repeat(4,minmax(160px,1fr)); gap:14px;
           width:min(1040px,100%); justify-content:center;
@@ -159,17 +159,20 @@ export class ClassSelectScene extends Phaser.Scene {
         }
         .btn-confirm {
           margin-top:24px; padding:14px 48px;
-          background:linear-gradient(135deg,#ffd700,#ffaa00);
-          color:#1a1a2e; border:none; border-radius:10px;
-          font-size:16px; font-weight:700; cursor:pointer;
-          transition:transform 0.1s;
+          font-family:'Cinzel',Georgia,serif; letter-spacing:2px;
+          background:linear-gradient(135deg,#f6cf6a,#e7b34a 55%,#c98f2e);
+          color:#2a1c06; border:1px solid #ffe7a8; border-radius:10px;
+          font-size:15px; font-weight:700; cursor:pointer;
+          box-shadow:0 8px 26px rgba(255,180,60,.25),inset 0 1px 0 rgba(255,255,255,.55);
+          transition:transform 0.1s, filter .2s;
         }
-        .btn-confirm:hover { transform:scale(1.03); }
+        .btn-confirm:hover { transform:scale(1.03); filter:brightness(1.06); }
         .btn-back {
-          margin-top:8px; padding:8px 24px;
-          background:transparent; color:#aabbcc;
-          border:1px solid rgba(255,255,255,0.15); border-radius:6px;
-          font-size:13px; cursor:pointer;
+          margin-top:8px; padding:9px 24px;
+          font-family:'Cinzel',Georgia,serif; letter-spacing:1px;
+          background:transparent; color:#a99a78;
+          border:1px solid rgba(255,216,138,.25); border-radius:7px;
+          font-size:12px; cursor:pointer;
         }
         @media (max-width: 760px) {
           #class-select { padding:12px; }

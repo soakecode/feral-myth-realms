@@ -12,6 +12,7 @@ import {
 import { ENV } from '../../config/env.js';
 import type { PlayerSession } from '../../auth/sessionStore.js';
 import { assetManifest } from '../../assets/assetManifest.js';
+import { gothicScreen } from '../../ui/theme.js';
 
 const CLASS_ART_POSITIONS: Record<string, string> = {
   stag_druid: '0% 0%',
@@ -69,157 +70,84 @@ export class LobbyScene extends Phaser.Scene {
     const roomsHtml = rooms.length > 0
       ? rooms.map((r) => `
           <div class="room-item" data-roomid="${r.roomId}">
-            <span>🌍 Sala ${r.metadata?.roomCode ?? r.roomId.slice(0, 6)}</span>
-            <span>${r.clients}/${r.maxClients} jugadores</span>
+            <span class="room-code-tag">${r.metadata?.roomCode ?? r.roomId.slice(0, 6)}</span>
+            <span class="room-meta">${r.clients}/${r.maxClients} héroes</span>
             <button class="room-join-btn" data-roomid="${r.roomId}">Unirse</button>
           </div>
         `).join('')
-      : `<div style="color:#667;font-size:12px;text-align:center;padding:12px">${t('lobby_no_rooms')}</div>`;
+      : `<div class="gnote" style="text-align:center;padding:10px">${t('lobby_no_rooms')}</div>`;
     const deployWarning = this.getDeployWarning();
     const serverEndpoint = getGameServerEndpoint();
+    const classColor = this.getClassColor(this.session.classKey);
 
-    overlay.innerHTML = `
+    const inner = `
       <style>
-        #lobby-scene {
-          position:absolute; top:0; left:0; width:100%; height:100%;
-          display:flex; align-items:center; justify-content:center;
-          background:
-            radial-gradient(ellipse at center,rgba(25,34,42,.22) 0%,rgba(8,10,14,.94) 72%),
-            url('${assetManifest.concept.realmsBiomes}') center/cover no-repeat;
-          font-family:'Segoe UI',system-ui,sans-serif; color:#fff;
-          padding:14px; box-sizing:border-box;
-        }
-        .lobby-card {
-          background:linear-gradient(180deg,rgba(16,20,24,.94),rgba(7,9,13,.96));
-          border:1px solid rgba(220,174,87,0.36); border-radius:8px;
-          padding:28px clamp(18px,5vw,36px); width:min(420px, 92vw); max-height:90vh; overflow-y:auto;
-          box-shadow:0 22px 70px rgba(0,0,0,0.58), inset 0 0 0 1px rgba(255,255,255,.04);
-        }
-        .lobby-card h2 { font-family:Georgia,serif; color:#f0d48a; font-size:22px; margin-bottom:10px; letter-spacing:.5px; }
-        .player-badge {
-          background:rgba(255,255,255,0.05); border-radius:8px;
-          border:1px solid rgba(255,255,255,.09);
-          padding:8px 12px; margin-bottom:20px; font-size:12px; color:#c9d4d9;
-          display:flex; align-items:center; gap:8px;
-        }
-        .player-portrait {
-          width:42px; height:42px; flex:0 0 42px; border-radius:50%;
-          background-image:url('${assetManifest.concept.charactersClasses}');
-          background-size:400% auto;
+        #lobby-scene .player-badge{display:flex;align-items:center;gap:10px;padding:8px 12px;margin-bottom:6px;
+          background:rgba(255,216,138,.06);border:1px solid rgba(255,216,138,.22);border-radius:10px;font-size:13px}
+        #lobby-scene .player-portrait{width:44px;height:44px;flex:0 0 44px;border-radius:50%;
+          background-image:url('${assetManifest.concept.charactersClasses}');background-size:400% auto;
           background-position:${CLASS_ART_POSITIONS[this.session.classKey] ?? '0% 0%'};
-          border:1px solid ${this.getClassColor(this.session.classKey)};
-          box-shadow:0 0 18px ${this.getClassColor(this.session.classKey)}55;
-        }
-        .player-class-dot {
-          width:12px; height:12px; border-radius:50%;
-          display:inline-block;
-        }
-        .section-title { font-size:11px; color:#a4936d; text-transform:uppercase;
-          letter-spacing:1px; margin:16px 0 8px; }
-        .lobby-btn {
-          width:100%; padding:12px; margin-bottom:8px;
-          border:1px solid rgba(255,255,255,.12); border-radius:6px; font-size:14px;
-          font-weight:600; cursor:pointer; display:flex;
-          align-items:center; gap:10px; justify-content:center;
-        }
-        .btn-coop { background:linear-gradient(135deg,#1e5a2e,#2a7a3e); color:#88ffaa; border:1px solid #2a7a3e; }
-        .btn-duel { background:linear-gradient(135deg,#5a1e1e,#7a2a2a); color:#ffaaaa; border:1px solid #7a2a2a; }
-        .btn-private { background:rgba(255,255,255,0.05); color:#d2c4a0; border:1px solid rgba(255,255,255,0.15); }
-        .lobby-btn:hover { filter:brightness(1.2); transform:translateY(-1px); }
-        .code-row { display:flex; gap:8px; margin-bottom:8px; }
-        .code-input {
-          flex:1; padding:10px 12px; background:rgba(255,255,255,0.05);
-          border:1px solid rgba(255,255,255,0.15); border-radius:6px;
-          color:#fff; font-size:14px; outline:none; text-transform:uppercase;
-          letter-spacing:2px;
-        }
-        .code-input::placeholder { letter-spacing:0; text-transform:none; }
-        .code-input:focus { border-color:#ffd700; }
-        .code-join-btn {
-          padding:10px 16px; background:linear-gradient(135deg,#ffd700,#ffaa00);
-          color:#1a1a2e; border:none; border-radius:6px;
-          font-weight:700; cursor:pointer; white-space:nowrap;
-        }
-        .rooms-list { max-height:120px; overflow-y:auto; }
-        .room-item {
-          display:flex; align-items:center; justify-content:space-between;
-          padding:6px 8px; border-radius:6px; font-size:12px;
-          background:rgba(255,255,255,0.04); margin-bottom:4px;
-        }
-        .room-join-btn {
-          padding:3px 10px; background:rgba(255,215,0,0.2);
-          color:#ffd700; border:1px solid rgba(255,215,0,0.3);
-          border-radius:4px; cursor:pointer; font-size:11px;
-        }
-        #lobby-status {
-          background:rgba(255,60,60,0.15); border:1px solid rgba(255,60,60,0.3);
-          border-radius:6px; padding:8px 12px; font-size:12px; color:#ff8888;
-          margin-top:10px; display:none;
-        }
-        .deploy-warning {
-          background:rgba(255,170,0,0.13);
-          border:1px solid rgba(255,190,80,0.32);
-          border-radius:8px;
-          padding:9px 11px;
-          margin:10px 0 12px;
-          color:#ffd58a;
-          font-size:12px;
-          line-height:1.35;
-        }
-        .server-target {
-          margin-top:8px;
-          color:#75848d;
-          font-size:10px;
-          overflow-wrap:anywhere;
-          text-align:center;
-        }
-        #lobby-loading {
-          text-align:center; padding:20px; color:#667; display:none;
-        }
-        .back-btn {
-          padding:8px 16px; background:transparent; color:#667;
-          border:1px solid rgba(255,255,255,0.1); border-radius:6px;
-          cursor:pointer; font-size:12px; margin-top:8px; width:100%;
-        }
-        .class-colors { stag_druid:'#4caf50',raven_witch:'#7c4dff',wolf_guardian:'#607d8b',fox_trickster:'#ff6f00' }
+          border:1px solid ${classColor};box-shadow:0 0 18px ${classColor}55}
+        #lobby-scene .badge-mode{margin-left:auto;font-size:10px;letter-spacing:1px;color:#a99a78;text-transform:uppercase}
+        #lobby-scene .deploy-warning{background:rgba(255,170,0,.1);border:1px solid rgba(255,190,80,.3);border-radius:8px;
+          padding:9px 11px;margin:8px 0 4px;color:#ffd58a;font-size:11.5px;line-height:1.4;font-family:'Segoe UI',sans-serif}
+        #lobby-scene .server-target{margin:2px 0 4px;color:#7d7259;font-size:10px;overflow-wrap:anywhere;text-align:center;font-family:'Segoe UI',sans-serif}
+        #lobby-scene .gbtn.coop{color:#bdf0c8;background:linear-gradient(135deg,rgba(30,84,44,.85),rgba(20,52,30,.92));border:1px solid rgba(120,220,150,.4)}
+        #lobby-scene .gbtn.coop:hover{box-shadow:0 0 22px rgba(110,220,140,.2)}
+        #lobby-scene .gbtn.duel{color:#ffc4b8;background:linear-gradient(135deg,rgba(96,30,30,.85),rgba(58,18,18,.92));border:1px solid rgba(255,130,110,.38)}
+        #lobby-scene .gbtn.duel:hover{box-shadow:0 0 22px rgba(255,110,90,.2)}
+        #lobby-scene .gbtn{margin-top:0;margin-bottom:8px}
+        #lobby-scene .code-row{display:flex;gap:8px}
+        #lobby-scene .code-row .ginput{text-transform:uppercase;letter-spacing:5px;text-align:center;font-weight:700;margin-bottom:0}
+        #lobby-scene .code-row .gbtn{width:auto;padding:11px 20px;margin:0;flex:none}
+        #lobby-scene .rooms-list{max-height:150px;overflow-y:auto;margin-bottom:2px}
+        #lobby-scene .room-item{display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:8px;
+          background:rgba(255,255,255,.035);border:1px solid rgba(255,216,138,.12);margin-bottom:5px;font-size:12px}
+        #lobby-scene .room-code-tag{font-weight:700;letter-spacing:2.5px;color:#ffd98a}
+        #lobby-scene .room-meta{margin-left:auto;color:#a99a78;font-size:11px}
+        #lobby-scene .room-join-btn{padding:5px 13px;background:rgba(255,216,138,.14);color:#ffd98a;
+          border:1px solid rgba(255,216,138,.4);border-radius:6px;cursor:pointer;font-family:'Cinzel',serif;
+          font-size:11px;letter-spacing:1px;font-weight:700}
+        #lobby-scene .room-join-btn:hover{background:rgba(255,216,138,.26)}
+        #lobby-scene #lobby-loading{text-align:center;padding:14px;color:#b9a777;display:none;letter-spacing:2px;font-size:12px}
       </style>
-      <div id="lobby-scene">
-        <div class="lobby-card">
-          <h2>🏰 ${t('lobby_title')}</h2>
+      <div class="gcard" style="width:min(440px,94vw)">
+        <h2 class="gtitle">${t('lobby_title')}</h2>
+        <p class="gsub">Reúne a tu hueste o adéntrate en solitario</p>
 
-          <div class="player-badge">
-            <span class="player-portrait"></span>
-            <span class="player-class-dot" style="background:${this.getClassColor(this.session.classKey)}"></span>
-            <span><strong>${this.session.alias}</strong></span>
-            <span style="margin-left:auto;font-size:10px;color:#556">${this.session.mode === 'registered' ? '✓ Registrado' : '👤 Invitado'}</span>
-          </div>
-
-          ${deployWarning ? `<div class="deploy-warning">${deployWarning}</div>` : ''}
-          <div class="server-target">Servidor: ${serverEndpoint}</div>
-
-          <div class="section-title">Jugar</div>
-          <button class="lobby-btn btn-coop" id="btn-create-realm">🌍 ${t('btn_create_realm')}</button>
-          <button class="lobby-btn btn-coop" id="btn-join-realm">🔗 ${t('btn_join_realm')}</button>
-          <button class="lobby-btn btn-duel" id="btn-duel">⚔️ ${t('btn_find_duel')}</button>
-
-          <div class="section-title">${t('btn_join_code')}</div>
-          <div class="code-row">
-            <input type="text" class="code-input" id="input-code" placeholder="XXXXXX" maxlength="6" />
-            <button class="code-join-btn" id="btn-join-code">${t('lobby_join')}</button>
-          </div>
-
-          <button class="lobby-btn btn-private" id="btn-create-private">🔒 ${t('btn_create_private')}</button>
-
-          <div class="section-title">${t('lobby_available_rooms')}</div>
-          <div class="rooms-list">${roomsHtml}</div>
-
-          <div id="lobby-status"></div>
-          <div id="lobby-loading">Conectando...</div>
-
-          <button class="back-btn" id="btn-back">← Volver al menú</button>
+        <div class="player-badge">
+          <span class="player-portrait"></span>
+          <strong>${this.session.alias}</strong>
+          <span class="badge-mode">${this.session.mode === 'registered' ? '✓ Registrado' : 'Invitado'}</span>
         </div>
+
+        ${deployWarning ? `<div class="deploy-warning">${deployWarning}</div>` : ''}
+        <div class="server-target">Servidor: ${serverEndpoint}</div>
+
+        <div class="gsect">Expedición</div>
+        <button class="gbtn coop" id="btn-create-realm">🌍 ${t('btn_create_realm')}</button>
+        <button class="gbtn coop" id="btn-join-realm">🔗 ${t('btn_join_realm')}</button>
+        <button class="gbtn duel" id="btn-duel">⚔️ ${t('btn_find_duel')}</button>
+
+        <div class="gsect">${t('btn_join_code')}</div>
+        <div class="code-row">
+          <input type="text" class="ginput" id="input-code" placeholder="••••••" maxlength="6" />
+          <button class="gbtn gold" id="btn-join-code">${t('lobby_join')}</button>
+        </div>
+        <div class="gnote" style="margin-top:7px">Cada sala nace con un <b style="color:#ffd98a">código de 6 letras</b>: dentro de la partida lo verás arriba (junto al estandarte ⚑) y podrás copiarlo para invitar a tus aliados. A una sala privada solo se entra con su código.</div>
+
+        <button class="gbtn ghost" id="btn-create-private" style="margin-top:10px">🔒 ${t('btn_create_private')}</button>
+
+        <div class="gsect">${t('lobby_available_rooms')}</div>
+        <div class="rooms-list">${roomsHtml}</div>
+
+        <div class="gerr" id="lobby-status"></div>
+        <div id="lobby-loading">⟡ Conectando…</div>
+
+        <button class="gbtn dim" id="btn-back">← Volver al menú</button>
       </div>
     `;
+    overlay.innerHTML = gothicScreen('lobby-scene', inner, { wide: true });
 
     document.getElementById('btn-create-realm')?.addEventListener('click', () => void this.joinGame('create-realm'));
     document.getElementById('btn-join-realm')?.addEventListener('click', () => void this.joinGame('join-realm'));

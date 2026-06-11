@@ -105,6 +105,8 @@ export class Game3D {
   private moveMarker: THREE.Mesh | null = null;
   private cameraMode: 'iso' | 'third' = 'iso';
   private wallDragStart: THREE.Vector3 | null = null;
+  /** Diablo-style command: walk to the clicked enemy/resource, then act. */
+  private pendingAction: { kind: 'attack' | 'harvest'; id: string } | null = null;
 
   // world interaction
   private nearestNodeId: string | null = null;
@@ -1017,6 +1019,7 @@ export class Game3D {
         if (this.enemies.has(id)) return;
         const group = this.createEnemyMesh(en.type);
         group.position.set(en.x, 0, en.y);
+        group.userData.pick = { kind: 'enemy', id };
         group.visible = en.isAlive;
         const label = this.makeLabel();
         label.sprite.position.set(0, 64, 0);
@@ -1046,6 +1049,7 @@ export class Game3D {
         if (this.resourceMeshes.has(id)) return;
         const g = this.createResourceMesh(n.type as ResourceType);
         g.position.set(n.x, 0, n.y);
+        g.userData.pick = { kind: 'resource', id };
         g.visible = n.available;
         this.scene.add(g);
         this.resourceMeshes.set(id, g);
@@ -1205,9 +1209,23 @@ export class Game3D {
         this.confirmBuild();
         return;
       }
-      // Left/primary click (or tap) sets a move destination; right-click attacks.
-      if (e.button === 2) this.queueBasicAttack();
-      else this.setMoveTargetFromPointer(e);
+      // Left/primary click (or tap): clicking an enemy attacks it, a resource
+      // harvests it (walking into range first); empty ground just moves.
+      // Right-click is a direct attack.
+      if (e.button === 2) { this.queueBasicAttack(); return; }
+      const picked = this.pickAt(e);
+      if (picked?.kind === 'enemy') {
+        this.pendingAction = { kind: 'attack', id: picked.id };
+        const en = (this.room.state as RealmRoomState).enemies?.get(picked.id);
+        if (en) this.spawnMoveMarker(new THREE.Vector3(en.x, 0, en.y), 0xff6a5a);
+      } else if (picked?.kind === 'resource') {
+        this.pendingAction = { kind: 'harvest', id: picked.id };
+        const n = (this.room.state as RealmRoomState).resources?.get(picked.id);
+        if (n) this.spawnMoveMarker(new THREE.Vector3(n.x, 0, n.y), 0x7fe3a0);
+      } else {
+        this.pendingAction = null;
+        this.setMoveTargetFromPointer(e);
+      }
     });
     canvas.addEventListener('pointerup', (e) => {
       if (this.buildMode === 'wall' && this.wallDragStart) {
@@ -1243,7 +1261,27 @@ export class Game3D {
     const hit = this.groundPoint(e);
     if (!hit) return;
     this.moveTarget = hit;
-    this.spawnMoveMarker(hit);
+    this.spawnMoveMarker(hit, 0xffe082);
+  }
+
+  /** Raycast enemies + resource nodes under the pointer. */
+  private pickAt(e: PointerEvent): { kind: 'enemy' | 'resource'; id: string } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const targets: THREE.Object3D[] = [];
+    this.enemies.forEach((en) => { if (en.group.visible) targets.push(en.group); });
+    this.resourceMeshes.forEach((g) => { if (g.visible) targets.push(g); });
+    const hits = this.raycaster.intersectObjects(targets, true);
+    for (const h of hits) {
+      let o: THREE.Object3D | null = h.object;
+      while (o) {
+        const pick = o.userData?.pick as { kind: 'enemy' | 'resource'; id: string } | undefined;
+        if (pick) return pick;
+        o = o.parent;
+      }
+    }
+    return null;
   }
 
   /** Linear wall: lay segments from start→end, capped by the player's stone. */
@@ -1268,15 +1306,16 @@ export class Game3D {
     const menu = document.getElementById('build3d'); if (menu) menu.style.display = 'none';
   }
 
-  private spawnMoveMarker(p: THREE.Vector3) {
+  private spawnMoveMarker(p: THREE.Vector3, color = 0xffe082) {
     if (!this.moveMarker) {
       this.moveMarker = new THREE.Mesh(
         new THREE.RingGeometry(10, 16, 28),
-        new THREE.MeshBasicMaterial({ color: 0xffe082, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
       );
       this.moveMarker.rotation.x = -Math.PI / 2;
       this.scene.add(this.moveMarker);
     }
+    (this.moveMarker.material as THREE.MeshBasicMaterial).color.setHex(color);
     this.moveMarker.position.set(p.x, 2, p.z);
     this.moveMarker.visible = true;
     this.moveMarker.scale.setScalar(1);
@@ -1344,10 +1383,38 @@ export class Game3D {
     if (this.keys['KeyS'] || this.keys['ArrowDown']) dy += 1;
     dx += this.joyDx; dy += this.joyDy;
 
-    // Manual input (keys/joystick) cancels click-to-move; otherwise steer to target.
+    // Manual input (keys/joystick) cancels click commands; otherwise resolve the
+    // pending Diablo-style action (chase enemy / walk to resource) into steering.
+    let forcedAttack = false;
     if (dx !== 0 || dy !== 0) {
+      this.pendingAction = null;
       this.clearMoveTarget();
-    } else if (this.moveTarget) {
+    } else if (this.pendingAction) {
+      const state = this.room.state as RealmRoomState;
+      const meEnt = this.players.get(this.localId);
+      const pa = this.pendingAction;
+      if (meEnt && pa.kind === 'attack') {
+        const en = state.enemies?.get(pa.id);
+        if (!en || !en.isAlive) { this.pendingAction = null; this.clearMoveTarget(); }
+        else {
+          const range = (state.players?.get(this.localId)?.attackRange ?? 90) * 0.95;
+          const d = Math.hypot(en.x - meEnt.group.position.x, en.y - meEnt.group.position.z);
+          if (d > range) {
+            this.moveTarget = new THREE.Vector3(en.x, 0, en.y);
+            if (this.moveMarker?.visible) this.moveMarker.position.set(en.x, 2, en.y);
+          } else { this.clearMoveTarget(); forcedAttack = true; }
+        }
+      } else if (meEnt && pa.kind === 'harvest') {
+        const n = state.resources?.get(pa.id);
+        if (!n || !n.available) { this.pendingAction = null; this.clearMoveTarget(); }
+        else {
+          const d = Math.hypot(n.x - meEnt.group.position.x, n.y - meEnt.group.position.z);
+          if (d > HARVEST_RANGE * 0.9) this.moveTarget = new THREE.Vector3(n.x, 0, n.y);
+          else { this.clearMoveTarget(); this.tryHarvest(); }
+        }
+      }
+    }
+    if (this.moveTarget) {
       const me = this.players.get(this.localId);
       if (me) {
         const tx = this.moveTarget.x - me.group.position.x;
@@ -1360,7 +1427,7 @@ export class Game3D {
 
     let abilityKey: AbilityKey | null = null;
     if (this.queuedAbility) { abilityKey = this.queuedAbility; this.queuedAbility = null; }
-    else if (this.keys['KeyJ'] || this.keys['Space']) abilityKey = 'basic';
+    else if (this.keys['KeyJ'] || this.keys['Space'] || forcedAttack) abilityKey = 'basic';
     else if (this.keys['KeyQ']) abilityKey = 'q';
     else if (this.keys['KeyE']) abilityKey = 'e';
     else if (this.keys['KeyR']) abilityKey = 'r';
@@ -1695,13 +1762,40 @@ export class Game3D {
         #game-hud3d #build3d{position:absolute;bottom:86px;left:50%;transform:translateX(-50%);display:none;flex-wrap:wrap;justify-content:center;gap:8px;max-width:min(620px,96vw);pointer-events:auto}
         #game-hud3d #build3d button{background:rgba(10,16,26,.85);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:8px;
           padding:8px 12px;font-size:12px;cursor:pointer;text-align:center;min-width:120px}
-        #game-hud3d #buildbtn3d{position:absolute;bottom:14px;left:12px;pointer-events:auto;background:rgba(10,16,26,.7);color:#fff;
+        #game-hud3d #buildbtn3d{display:none;position:absolute;bottom:14px;left:12px;pointer-events:auto;background:rgba(10,16,26,.7);color:#fff;
           border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer}
         #game-hud3d #charbtn3d{position:absolute;bottom:90px;left:12px;pointer-events:auto;background:rgba(10,16,26,.7);color:#ffd98a;
           border:1px solid rgba(255,216,138,.4);border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer}
         #game-hud3d #charbtn3d.pts{animation:perkPulse 1.4s ease-in-out infinite}
         @keyframes perkPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,216,138,0)}50%{box-shadow:0 0 16px 2px rgba(255,216,138,.55)}}
-        #game-hud3d #abar3d{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;gap:8px;pointer-events:auto}
+        #game-hud3d #dock3d{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;align-items:stretch;gap:10px;
+          pointer-events:auto;background:linear-gradient(180deg,rgba(20,16,11,.8),rgba(9,8,6,.88));border:1px solid rgba(255,216,138,.3);
+          border-radius:14px;padding:8px 10px;backdrop-filter:blur(6px);box-shadow:0 14px 44px rgba(0,0,0,.55)}
+        #game-hud3d .dock-sep{width:1px;background:linear-gradient(180deg,transparent,rgba(255,216,138,.35),transparent)}
+        #game-hud3d #abar3d{display:flex;gap:7px}
+        #game-hud3d #bpal3d{display:flex;gap:6px}
+        #game-hud3d #bpal3d .bslot{position:relative;width:58px;height:62px;border-radius:9px;cursor:pointer;
+          border:1px solid rgba(255,216,138,.28);background:rgba(255,255,255,.03);color:#e8dcc0;
+          display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Cinzel',Georgia,serif}
+        #game-hud3d #bpal3d .bslot:hover{border-color:#ffd98a;background:rgba(255,216,138,.08)}
+        #game-hud3d #bpal3d .bslot .ic{font-size:17px;line-height:1}
+        #game-hud3d #bpal3d .bslot .nm{font-size:7.5px;margin-top:2px;text-align:center;opacity:.85;padding:0 2px}
+        #game-hud3d #bpal3d .bslot .cst{font-size:8px;margin-top:1px;color:#9fd0a8;letter-spacing:.4px}
+        #game-hud3d #bpal3d .bslot .hk{position:absolute;top:2px;left:5px;font-size:8.5px;color:#ffd98a;font-weight:700}
+        #game-hud3d #bpal3d .bslot.poor{filter:saturate(.25) brightness(.6)}
+        #game-hud3d #bpal3d .bslot.poor .cst{color:#e08a7a}
+        #game-hud3d #dinfo3d{display:flex;flex-direction:column;justify-content:center;gap:4px;min-width:92px;padding:0 4px}
+        #game-hud3d #dinfo3d .drow{font-size:10px;color:#cdbfa0;display:flex;gap:6px;align-items:center;font-family:'Cinzel',Georgia,serif;letter-spacing:.5px}
+        #game-hud3d #dinfo3d .drow b{color:#ffd98a;letter-spacing:2px}
+        #game-hud3d #codechipw{cursor:pointer;border:1px solid rgba(255,216,138,.3);border-radius:7px;padding:4px 8px;background:rgba(255,216,138,.07)}
+        #game-hud3d #codechipw:hover{border-color:#ffd98a}
+        #game-hud3d #mcode3d{display:none;position:absolute;top:calc(env(safe-area-inset-top,0px) + 8px);left:50%;transform:translateX(-50%);
+          pointer-events:auto;font-family:'Cinzel',Georgia,serif;font-size:11px;color:#ffd98a;background:rgba(10,8,6,.74);
+          border:1px solid rgba(255,216,138,.35);border-radius:7px;padding:5px 10px;letter-spacing:2px}
+        #game-hud3d #starthint3d{position:absolute;top:36%;left:50%;transform:translate(-50%,-50%);z-index:4;
+          background:rgba(10,8,6,.84);border:1px solid rgba(255,216,138,.4);border-radius:12px;padding:13px 22px;
+          font-family:'Cinzel',Georgia,serif;color:#f0e6cf;font-size:13px;text-align:center;letter-spacing:.4px;line-height:1.8;
+          box-shadow:0 18px 60px rgba(0,0,0,.6);transition:opacity .8s;pointer-events:none;max-width:min(480px,90vw)}
         #game-hud3d #abar3d .slot{position:relative;width:62px;height:62px;border-radius:10px;cursor:pointer;overflow:hidden;
           border:1px solid rgba(255,216,138,.35);background:linear-gradient(180deg,rgba(24,20,14,.9),rgba(12,10,8,.94));
           color:#f0e6cf;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Cinzel',Georgia,serif}
@@ -1764,7 +1858,9 @@ export class Game3D {
           #game-hud3d #cambtn3d{top:calc(env(safe-area-inset-top,0px) + 50px);right:8px;left:auto;bottom:auto;padding:7px 10px;font-size:12px;background:rgba(10,16,26,.74)}
           #game-hud3d #buildbtn3d{top:calc(env(safe-area-inset-top,0px) + 92px);right:8px;left:auto;bottom:auto;padding:7px 10px;font-size:12px;background:rgba(10,16,26,.74)}
           #game-hud3d #charbtn3d{top:calc(env(safe-area-inset-top,0px) + 134px);right:8px;left:auto;bottom:auto;padding:7px 10px;font-size:12px;background:rgba(10,16,26,.74)}
-          #game-hud3d #abar3d{display:none}
+          #game-hud3d #dock3d{display:none}
+          #game-hud3d #mcode3d{display:block}
+          #game-hud3d #buildbtn3d{display:block}
           #game-hud3d #mini3d{top:calc(env(safe-area-inset-top,0px) + 92px);left:8px;right:auto;bottom:auto;width:104px;height:80px;opacity:.8}
           #game-hud3d #build3d{bottom:calc(env(safe-area-inset-bottom,0px) + 128px);left:50%;right:auto;transform:translateX(-50%);max-width:calc(100vw - 18px)}
           #game-hud3d #build3d button{min-width:108px;padding:9px 10px}
@@ -1801,7 +1897,19 @@ export class Game3D {
       <button id="settingsbtn3d">Ajustes</button>
       <button id="cambtn3d">🎥 Vista</button>
       <button id="charbtn3d">👤 Héroe (C)</button>
-      <div id="abar3d"></div>
+      <div id="dock3d">
+        <div id="abar3d"></div>
+        <div class="dock-sep"></div>
+        <div id="bpal3d"></div>
+        <div class="dock-sep"></div>
+        <div id="dinfo3d">
+          <div class="drow" id="codechipw" title="Copiar código de sala">⚑ <b id="dcode3d">——</b></div>
+          <div class="drow">👥 <span id="dplayers3d">1</span> héroes</div>
+          <div class="drow">🏰 <span id="dstructs3d">0</span> · 🛡 <span id="dunits3d">0</span></div>
+        </div>
+      </div>
+      <div id="mcode3d">⚑ ——</div>
+      <div id="starthint3d"></div>
       <div id="charpanel3d"><div class="card" id="charcard3d"></div></div>
       <button id="buildbtn3d">🔨 Construir (B)</button>
       <div id="build3d">
@@ -1838,6 +1946,24 @@ export class Game3D {
       if (e.target === document.getElementById('charpanel3d')) this.toggleCharPanel();
     });
     this.buildActionBar();
+    this.buildBuildPalette();
+    const copyCode = () => {
+      if (!this.roomCode) return;
+      void navigator.clipboard?.writeText(this.roomCode).then(() => this.showToast('⚑ Código copiado — compártelo con tus aliados'));
+    };
+    document.getElementById('codechipw')?.addEventListener('click', copyCode);
+    document.getElementById('mcode3d')?.addEventListener('click', copyCode);
+    const hintEl = document.getElementById('starthint3d');
+    if (hintEl) {
+      const isTouch = window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+      hintEl.innerHTML = isTouch
+        ? '👆 <b>Toca el suelo</b> para moverte<br>Toca un <b>enemigo</b> para atacarlo · un <b>recurso</b> para recolectarlo'
+        : '🖱️ <b>Clic</b>: moverte · clic en <b>enemigo</b>: atacar · clic en <b>recurso</b>: recolectar<br>⌨️ C héroe · 1-5 construir · V vista · Q/E/R habilidades';
+      window.setTimeout(() => {
+        hintEl.style.opacity = '0';
+        window.setTimeout(() => hintEl.remove(), 900);
+      }, 9000);
+    }
     document.getElementById('buildbtn3d')!.addEventListener('click', () => this.toggleBuildMenu());
     document.getElementById('closeSettings3d')!.addEventListener('click', () => this.closeSettings());
     document.getElementById('leaveGame3d')!.addEventListener('click', () => this.leaveToLobby());
@@ -1873,6 +1999,25 @@ export class Game3D {
         const k = el.dataset.slot as AbilityKey;
         if (k === 'basic') this.queueBasicAttack(); else this.queuedAbility = k;
       });
+    });
+  }
+
+  private buildBuildPalette() {
+    const pal = document.getElementById('bpal3d');
+    if (!pal) return;
+    const order: StructureType[] = ['campfire', 'totem', 'wall', 'barracks', 'shelter'];
+    pal.innerHTML = order.map((tp, i) => {
+      const d = STRUCTURE_DEFS[tp];
+      const cost = Object.entries(d.cost)
+        .map(([r, a]) => `${a}${RESOURCE_INFO[r as ResourceType].icon}`)
+        .join(' ');
+      return `<div class="bslot" data-build="${tp}" title="${d.name} — ${d.desc}">
+        <span class="hk">${i + 1}</span><span class="ic">${d.icon}</span>
+        <span class="nm">${d.name.split(' ')[0]}</span><span class="cst">${cost}</span>
+      </div>`;
+    }).join('');
+    pal.querySelectorAll<HTMLElement>('.bslot').forEach((b) => {
+      b.addEventListener('click', () => this.selectBuild(b.dataset.build as StructureType));
     });
   }
 
@@ -2066,6 +2211,24 @@ export class Game3D {
       this.lastThreatTier = tTier;
       this.showToast(`☠️ La corrupción se intensifica — Amenaza ${romanNumeral(tTier + 1)}`);
     }
+
+    // Dock: room code, realm counters, build affordability
+    set('dcode3d', this.roomCode || '——');
+    const mcodeEl = document.getElementById('mcode3d');
+    if (mcodeEl) mcodeEl.textContent = `⚑ ${this.roomCode || '——'}`;
+    set('dplayers3d', String(countPlayers(state)));
+    set('dstructs3d', String(countMap(state.structures)));
+    set('dunits3d', String(countMap(state.units)));
+    document.querySelectorAll<HTMLElement>('#bpal3d .bslot').forEach((b) => {
+      const d = STRUCTURE_DEFS[b.dataset.build as StructureType];
+      if (!d) return;
+      let ok = true;
+      for (const [r, a] of Object.entries(d.cost)) {
+        const key = r === 'rune_shard' ? 'runeShard' : r;
+        if (((me as unknown as Record<string, number>)[key] ?? 0) < (a as number)) ok = false;
+      }
+      b.classList.toggle('poor', !ok);
+    });
 
     // Action bar cooldowns + perk badge
     this.updateActionBar(me as unknown as { classKey: string; energy: number; cooldowns?: Record<string, number> });
