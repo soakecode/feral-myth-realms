@@ -9,7 +9,9 @@ import type { Room } from '@colyseus/sdk';
 import {
   MSG, CLASS_DEFINITIONS, clamp, WORLD, ZONES, OBSTACLES, zoneAt, isBlocked,
   RESOURCE_INFO, STRUCTURE_DEFS, HARVEST_RANGE, BUILD_RANGE, distance, threatTier,
+  waveNumberAt, nextWaveAtMs,
 } from '@fmr/shared';
+import { AudioSystem } from './AudioSystem.js';
 import type {
   PlayerClass, AbilityKey, PlayerInputPayload, ResourceType, StructureType,
 } from '@fmr/shared';
@@ -118,6 +120,10 @@ export class Game3D {
   private objectiveTier = 0;
   private charOpen = false;
   private lastThreatTier = 0;
+  private audio = new AudioSystem();
+  private lastAbilitySfx = 0;
+  /** Session chronicle shown in the hero panel. */
+  private chron = { kills: 0, gathered: 0, built: 0, waves: 0 };
   private toast = '';
   private toastUntil = 0;
 
@@ -1112,18 +1118,24 @@ export class Game3D {
     });
     this.room.onMessage(MSG.DAMAGE_EVENT, (d: { targetId: string; amount: number; isPlayer: boolean }) => {
       this.showDamageFeedback(d.targetId, d.amount, d.isPlayer);
+      if (d.isPlayer && d.targetId === this.localId) this.audio.sfx('hurt');
+      else if (!d.isPlayer) this.audio.sfx('hit');
     });
     this.room.onMessage(MSG.ENEMY_DIED, (d: { killerId: string; enemyType?: string }) => {
-      if (d.killerId === this.localId) this.progressObjective('kill');
+      this.audio.sfx('die');
+      if (d.killerId === this.localId) { this.progressObjective('kill'); this.chron.kills += 1; }
     });
-    this.room.onMessage(MSG.RESOURCE_GAINED, (d: { type: ResourceType }) => {
-      this.progressObjective('gather');
+    this.room.onMessage(MSG.RESOURCE_GAINED, (d: { type: ResourceType; loot?: boolean }) => {
+      if (!d.loot) { this.progressObjective('gather'); this.audio.sfx('harvest'); }
+      this.chron.gathered += 1;
       const info = RESOURCE_INFO[d.type];
-      this.showToast(`+1 ${info.icon} ${info.name}`);
+      this.showToast(`+1 ${info.icon} ${info.name}${d.loot ? ' (botín)' : ''}`);
     });
     this.room.onMessage(MSG.STRUCTURE_BUILT, (d: { type: StructureType; ownerId: string }) => {
       if (d.ownerId === this.localId) {
         this.progressObjective('build');
+        this.chron.built += 1;
+        this.audio.sfx('build');
         // walls fire many builds at once — don't spam a toast per segment
         if (d.type !== 'wall') this.showToast(`${STRUCTURE_DEFS[d.type].icon} ${STRUCTURE_DEFS[d.type].name} construido`);
       }
@@ -1131,8 +1143,16 @@ export class Game3D {
     this.room.onMessage(MSG.BUILD_DENIED, (d: { reason: string }) => this.showToast(`✗ ${d.reason}`));
     this.room.onMessage(MSG.LEVEL_UP, (d: { level: number }) => {
       this.showToast(`⭐ ¡Nivel ${d.level}! +1 punto de mejora — pulsa C`);
+      this.audio.sfx('level');
       this.setObjective('level', d.level);
       if (this.charOpen) this.renderCharPanel();
+    });
+    this.room.onMessage(MSG.WAVE_STARTED, (d: { wave: number }) => {
+      this.audio.sfx('horn');
+      this.chron.waves += 1;
+      this.progressObjective('wave');
+      this.showZoneBanner(`☠️ ¡ASEDIO! Oleada ${d.wave}`, '#ff7a5a');
+      this.showToast('La horda marcha hacia el santuario — ¡a las murallas!');
     });
     this.room.onMessage(MSG.MATCH_END, () => { /* realm: no end */ });
     this.room.onLeave(() => {
@@ -1155,6 +1175,7 @@ export class Game3D {
         { id: 'gather', label: 'Recolecta 5 recursos', goal: 5, progress: 0, done: false },
         { id: 'kill', label: 'Derrota 3 criaturas corruptas', goal: 3, progress: 0, done: false },
         { id: 'build', label: 'Construye tu primera estructura', goal: 1, progress: 0, done: false },
+        { id: 'wave', label: 'Resiste tu primer asedio', goal: 1, progress: 0, done: false },
         { id: 'sanctuary', label: 'Captura un santuario', goal: 1, progress: 0, done: false },
       ];
     }
@@ -1164,6 +1185,7 @@ export class Game3D {
       { id: 'gather', label: `Reúne ${g(15)} recursos para el reino`, goal: g(15), progress: 0, done: false },
       { id: 'kill', label: `Derrota ${g(10)} criaturas corruptas`, goal: g(10), progress: 0, done: false },
       { id: 'build', label: `Levanta ${g(3)} construcciones del reino`, goal: g(3), progress: 0, done: false },
+      { id: 'wave', label: `Resiste ${g(2)} asedios`, goal: g(2), progress: 0, done: false },
       { id: 'level', label: `Alcanza el nivel ${2 + tier}`, goal: 2 + tier, progress: 0, done: false },
     ];
   }
@@ -1202,6 +1224,7 @@ export class Game3D {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('pointermove', (e) => this.updateAim(e));
     canvas.addEventListener('pointerdown', (e) => {
+      this.audio.ensure();
       this.updateAim(e);
       if (this.buildMode) {
         if (e.button === 2) { this.cancelBuild(); return; }
@@ -1343,6 +1366,8 @@ export class Game3D {
   private handleKey(code: string, down: boolean) {
     this.keys[code] = down;
     if (!down) return;
+    this.audio.ensure();
+    if (code === 'KeyM') { const m = this.audio.toggleMute(); this.showToast(m ? '🔇 Sonido silenciado (M)' : '🔊 Sonido activado'); return; }
     if (code === 'Escape' && this.settingsOpen) this.closeSettings();
     else if (code === 'Escape' && this.charOpen) this.toggleCharPanel();
     else if (code === 'KeyC') this.toggleCharPanel();
@@ -1433,7 +1458,15 @@ export class Game3D {
     else if (this.keys['KeyR']) abilityKey = 'r';
 
     if (dx === 0 && dy === 0 && abilityKey === null) return null;
-    if (abilityKey) { const me = this.players.get(this.localId); if (me?.rig) me.rig.attack = 1; }
+    if (abilityKey) {
+      const me = this.players.get(this.localId);
+      if (me?.rig) me.rig.attack = 1;
+      const nowMs = performance.now();
+      if (nowMs - this.lastAbilitySfx > 380) {
+        this.lastAbilitySfx = nowMs;
+        this.audio.sfx(abilityKey === 'basic' ? 'attack' : 'ability');
+      }
+    }
     // Damage abilities auto-aim the nearest foe; movement abilities (E: blink/
     // dash/leap) head to the cursor / last tap instead.
     const aim = abilityKey === 'e' ? this.aim : abilityKey ? this.autoAim() : this.aim;
@@ -1748,7 +1781,7 @@ export class Game3D {
           text-shadow:0 2px 14px rgba(0,0,0,.8);opacity:0;transition:opacity .5s;letter-spacing:1px}
         #game-hud3d #toast3d{position:absolute;bottom:150px;left:50%;transform:translateX(-50%);background:rgba(10,16,26,.8);
           border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:7px 16px;font-size:14px;opacity:0;transition:opacity .25s}
-        #game-hud3d #mini3d{position:absolute;bottom:12px;right:12px;border:1px solid rgba(255,255,255,.22);border-radius:6px;background:rgba(0,0,0,.45)}
+        #game-hud3d #mini3d{position:absolute;bottom:12px;right:12px;border:1px solid rgba(255,216,138,.3);border-radius:6px;background:rgba(0,0,0,.45);pointer-events:auto;cursor:crosshair}
         #game-hud3d #hint3d{position:absolute;bottom:130px;left:50%;transform:translateX(-50%);font-size:13px;background:rgba(0,0,0,.5);
           border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:5px 12px;display:none}
         #game-hud3d #back3d{position:absolute;top:10px;left:50%;transform:translateX(-50%);pointer-events:auto;background:rgba(10,16,26,.6);
@@ -1906,6 +1939,7 @@ export class Game3D {
           <div class="drow" id="codechipw" title="Copiar código de sala">⚑ <b id="dcode3d">——</b></div>
           <div class="drow">👥 <span id="dplayers3d">1</span> héroes</div>
           <div class="drow">🏰 <span id="dstructs3d">0</span> · 🛡 <span id="dunits3d">0</span></div>
+          <div class="drow" title="Tiempo hasta el próximo asedio" style="color:#ff9a7a">☠️ <span id="dwave3d">—</span></div>
         </div>
       </div>
       <div id="mcode3d">⚑ ——</div>
@@ -1925,6 +1959,7 @@ export class Game3D {
           <h3>Ajustes</h3>
           <p id="settingsmsg3d">La partida online sigue activa mientras este menu esta abierto.</p>
           <button class="primary" id="installpwa3d">Instalar como app</button>
+          <button id="soundbtn3d">🔊 Sonido (M)</button>
           <button id="fullscreen3d">Pantalla completa</button>
           <button id="closeSettings3d">Volver al juego</button>
           <button class="danger" id="leaveGame3d">Salir al lobby</button>
@@ -1953,6 +1988,18 @@ export class Game3D {
     };
     document.getElementById('codechipw')?.addEventListener('click', copyCode);
     document.getElementById('mcode3d')?.addEventListener('click', copyCode);
+    // Minimap acts as a command map: click/tap to send the hero there.
+    const mini = document.getElementById('mini3d') as HTMLCanvasElement | null;
+    mini?.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      const r = mini.getBoundingClientRect();
+      const wx = clamp(((e.clientX - r.left) / r.width) * WORLD.width, 30, WORLD.width - 30);
+      const wz = clamp(((e.clientY - r.top) / r.height) * WORLD.height, 30, WORLD.height - 30);
+      this.pendingAction = null;
+      this.moveTarget = new THREE.Vector3(wx, 0, wz);
+      this.spawnMoveMarker(this.moveTarget, 0xffe082);
+      this.audio.sfx('click');
+    });
     const hintEl = document.getElementById('starthint3d');
     if (hintEl) {
       const isTouch = window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
@@ -1968,6 +2015,12 @@ export class Game3D {
     document.getElementById('closeSettings3d')!.addEventListener('click', () => this.closeSettings());
     document.getElementById('leaveGame3d')!.addEventListener('click', () => this.leaveToLobby());
     document.getElementById('installpwa3d')!.addEventListener('click', () => void this.installPWA());
+    document.getElementById('soundbtn3d')?.addEventListener('click', () => {
+      this.audio.ensure();
+      const m = this.audio.toggleMute();
+      const b = document.getElementById('soundbtn3d');
+      if (b) b.textContent = m ? '🔇 Sonido silenciado (M)' : '🔊 Sonido (M)';
+    });
     document.getElementById('fullscreen3d')!.addEventListener('click', () => void this.enterFullscreen());
     el.querySelectorAll<HTMLElement>('#build3d button').forEach((b) => {
       b.addEventListener('click', () => this.selectBuild(b.dataset.build as StructureType));
@@ -2102,12 +2155,20 @@ export class Game3D {
         Construcciones: <b style="color:#ffe6ad">${countMap(state.structures)}</b> ·
         Soldados: <b style="color:#ffe6ad">${countMap(state.units)}</b>
       </div>
+      <div class="sect">Crónica de la partida</div>
+      <div class="grid">
+        <div class="stat"><b>${this.chron.kills}</b><span>Bajas</span></div>
+        <div class="stat"><b>${this.chron.gathered}</b><span>Recursos</span></div>
+        <div class="stat"><b>${this.chron.built}</b><span>Obras</span></div>
+        <div class="stat"><b>${this.chron.waves}</b><span>Asedios</span></div>
+      </div>
       <button class="close" id="charclose3d">Volver al combate (C)</button>
     `;
     card.querySelectorAll<HTMLElement>('.perk').forEach((b) => {
       b.addEventListener('click', () => {
         const perk = b.dataset.perk!;
         this.room.send(MSG.PERK_CHOICE, { perk });
+        this.audio.sfx('perk');
         window.setTimeout(() => { if (this.charOpen) this.renderCharPanel(); }, 150);
       });
     });
@@ -2175,13 +2236,13 @@ export class Game3D {
     }).join('');
   }
 
-  private showZoneBanner(name: string) {
+  private showZoneBanner(name: string, color = '#ffffff') {
     const z = document.getElementById('zone3d');
     const lbl = document.getElementById('zonelbl3d');
-    if (lbl) lbl.textContent = name;
+    if (lbl && color === '#ffffff') lbl.textContent = name;
     if (!z) return;
-    z.textContent = name; z.style.opacity = '1';
-    window.setTimeout(() => { if (z) z.style.opacity = '0'; }, 2200);
+    z.textContent = name; z.style.color = color; z.style.opacity = '1';
+    window.setTimeout(() => { if (z) z.style.opacity = '0'; }, 2600);
   }
 
   private showToast(msg: string) { this.toast = msg; this.toastUntil = performance.now() + 1800; }
@@ -2212,10 +2273,16 @@ export class Game3D {
       this.showToast(`☠️ La corrupción se intensifica — Amenaza ${romanNumeral(tTier + 1)}`);
     }
 
-    // Dock: room code, realm counters, build affordability
+    // Dock: room code, siege countdown, realm counters, build affordability
     set('dcode3d', this.roomCode || '——');
+    const elapsed = state.elapsedMs ?? 0;
+    const remainMs = Math.max(0, nextWaveAtMs(elapsed) - elapsed);
+    const mm = Math.floor(remainMs / 60000);
+    const ss = Math.floor((remainMs % 60000) / 1000);
+    const countdown = `${mm}:${String(ss).padStart(2, '0')}`;
+    set('dwave3d', `Oleada ${waveNumberAt(elapsed) + 1} en ${countdown}`);
     const mcodeEl = document.getElementById('mcode3d');
-    if (mcodeEl) mcodeEl.textContent = `⚑ ${this.roomCode || '——'}`;
+    if (mcodeEl) mcodeEl.textContent = `⚑ ${this.roomCode || '——'} · ☠️ ${countdown}`;
     set('dplayers3d', String(countPlayers(state)));
     set('dstructs3d', String(countMap(state.structures)));
     set('dunits3d', String(countMap(state.units)));
@@ -2368,6 +2435,7 @@ export class Game3D {
     if (this.buildGhost) disposeSingleMesh(this.buildGhost);
     if (this.moveMarker) disposeSingleMesh(this.moveMarker);
     if (this.fireflies) disposeGroup(this.fireflies);
+    this.audio.dispose();
     this.composer?.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();

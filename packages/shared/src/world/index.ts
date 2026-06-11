@@ -310,3 +310,21 @@ export function threatTier(elapsedMs: number): number {
 export function threatMultiplier(elapsedMs: number): number {
   return 1 + threatTier(elapsedMs) * 0.22;
 }
+
+// ---- Siege waves ------------------------------------------------------------
+// Periodic hordes spawn at the map edges and march on the sanctum. Timing is
+// derived from elapsedMs on both sides (server spawns, client counts down).
+
+export const WAVE_FIRST_AT_MS = 2 * 60 * 1000;
+export const WAVE_INTERVAL_MS = 3 * 60 * 1000;
+
+/** How many waves have started by this time. */
+export function waveNumberAt(elapsedMs: number): number {
+  if (elapsedMs < WAVE_FIRST_AT_MS) return 0;
+  return 1 + Math.floor((elapsedMs - WAVE_FIRST_AT_MS) / WAVE_INTERVAL_MS);
+}
+
+/** Absolute elapsedMs at which the next wave will start. */
+export function nextWaveAtMs(elapsedMs: number): number {
+  return WAVE_FIRST_AT_MS + waveNumberAt(elapsedMs) * WAVE_INTERVAL_MS;
+}

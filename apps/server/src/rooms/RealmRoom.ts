@@ -7,6 +7,7 @@ import { CombatSystem } from '../systems/CombatSystem.js';
 import { initSanctuaries, tickSanctuaries } from '../systems/SanctuarySystem.js';
 import { WorldSystem } from '../systems/WorldSystem.js';
 import { UnitSystem } from '../systems/UnitSystem.js';
+import { WaveSystem } from '../systems/WaveSystem.js';
 import { validateSupabaseToken } from '../auth/validateToken.js';
 import { persistMatchResult, incrementPlayerStats, updateCharacterXp } from '../db/supabase.js';
 import {
@@ -38,6 +39,7 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
   private combat = new CombatSystem();
   private world = new WorldSystem();
   private units = new UnitSystem();
+  private waves = new WaveSystem();
   private xpAccumulated: Map<string, number> = new Map();
   private playerUserIds: Map<string, string | null> = new Map();
   private harvestCd: Map<string, number> = new Map();
@@ -237,6 +239,7 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
           if (r.killed && !r.isPlayer) {
             const enemyType = this.state.enemies.get(r.targetId)?.type ?? 'wisp';
             this.awardXp(sessionId, XP_PER_ENEMY_KILL[enemyType] ?? 10);
+            this.grantKillLoot(sessionId, enemyType);
             this.broadcast(MSG.ENEMY_DIED, { enemyId: r.targetId, killerId: sessionId, enemyType });
           }
         });
@@ -247,6 +250,7 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
           if (r.killed && !r.isPlayer) {
             const enemyType = this.state.enemies.get(r.targetId)?.type ?? 'wisp';
             this.awardXp(sessionId, XP_PER_ENEMY_KILL[enemyType] ?? 10);
+            this.grantKillLoot(sessionId, enemyType);
             this.broadcast(MSG.ENEMY_DIED, { enemyId: r.targetId, killerId: sessionId, enemyType });
           }
         });
@@ -269,6 +273,11 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
     // Threat escalation: "la máquina" presses harder as the realm endures.
     this.enemyAI.setThreat(threatMultiplier(this.state.elapsedMs));
 
+    // Siege waves: hordes spawn at the edges and march on the sanctum.
+    const wave = this.waves.maybeSpawn(this.state.elapsedMs, this.state.enemies, threatMultiplier(this.state.elapsedMs));
+    if (wave > 0) this.broadcast(MSG.WAVE_STARTED, { wave });
+    this.waves.cleanup(this.state.enemies);
+
     // Enemy AI tick (walls block creatures)
     const enemyDamage = this.enemyAI.tick(this.state.enemies, this.state.players, deltaMs, now, this.state.structures);
     enemyDamage.forEach((ev) => {
@@ -282,6 +291,7 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
       if (ev.killed) {
         // Half XP for the barracks owner — the kingdom fights for you.
         this.awardXp(ev.ownerId, Math.ceil((XP_PER_ENEMY_KILL[ev.enemyType] ?? 10) / 2));
+        this.grantKillLoot(ev.ownerId, ev.enemyType);
         this.broadcast(MSG.ENEMY_DIED, { enemyId: ev.enemyId, killerId: ev.ownerId, enemyType: ev.enemyType });
       }
     });
@@ -319,6 +329,18 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
     player.animState = 'idle';
     player.respawnTimer = 0;
     this.broadcast(MSG.PLAYER_RESPAWNED, { playerId: player.id });
+  }
+
+  /** Combat feeds the kingdom: each creature drops its signature resource. */
+  private grantKillLoot(sessionId: string, enemyType: string) {
+    const p = this.state.players.get(sessionId);
+    if (!p) return;
+    const drop = enemyType === 'bramble_beast' ? 'wood' : enemyType === 'rune_imp' ? 'rune_shard' : 'essence';
+    if (drop === 'wood') p.wood += 1;
+    else if (drop === 'rune_shard') p.runeShard += 1;
+    else p.essence += 1;
+    const client = this.clients.find((c) => c.sessionId === sessionId);
+    client?.send(MSG.RESOURCE_GAINED, { type: drop, amount: 1, loot: true });
   }
 
   private nearestShelter(x: number, y: number): StructureSchema | null {

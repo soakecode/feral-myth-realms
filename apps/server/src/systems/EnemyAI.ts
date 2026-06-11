@@ -69,8 +69,8 @@ export class EnemyAI {
       });
 
       if (!closest) {
-        enemy.animState = 'idle';
-        enemy.targetPlayerId = '';
+        if (eid.startsWith('wave_')) this.marchOnSanctum(enemy, def.moveSpeed, deltaMs, structures);
+        else { enemy.animState = 'idle'; enemy.targetPlayerId = ''; }
         return;
       }
 
@@ -80,8 +80,8 @@ export class EnemyAI {
       const targetId = closestData.id;
 
       if (dist > def.aggroRange) {
-        enemy.animState = 'idle';
-        enemy.targetPlayerId = '';
+        if (eid.startsWith('wave_')) this.marchOnSanctum(enemy, def.moveSpeed, deltaMs, structures);
+        else { enemy.animState = 'idle'; enemy.targetPlayerId = ''; }
         return;
       }
 
@@ -119,6 +119,24 @@ export class EnemyAI {
     });
 
     return damageEvents;
+  }
+
+  /** Siege behaviour: wave enemies push toward the sanctum until they find prey. */
+  private marchOnSanctum(
+    enemy: EnemySchema,
+    moveSpeed: number,
+    deltaMs: number,
+    structures?: MapSchema<StructureSchema>
+  ) {
+    const d = distance(enemy.x, enemy.y, WORLD.sanctum.x, WORLD.sanctum.y);
+    if (d < WORLD.sanctum.r * 0.7) { enemy.animState = 'idle'; return; }
+    const n = normalize(WORLD.sanctum.x - enemy.x, WORLD.sanctum.y - enemy.y);
+    const dt = deltaMs / 1000;
+    const nx = clamp(enemy.x + n.x * moveSpeed * dt, 50, MAP_W - 50);
+    const ny = clamp(enemy.y + n.y * moveSpeed * dt, 50, MAP_H - 50);
+    if (!structures || !blockedByStructure(nx, enemy.y, 18, structures)) enemy.x = nx;
+    if (!structures || !blockedByStructure(enemy.x, ny, 18, structures)) enemy.y = ny;
+    enemy.animState = 'walk';
   }
 
   private respawnEnemy(enemy: EnemySchema, id: string) {

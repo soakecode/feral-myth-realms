@@ -21,6 +21,7 @@ export const MSG = {
   DAMAGE_EVENT: 'damage_event',
   ENEMY_DIED: 'enemy_died',
   SANCTUARY_UPDATE: 'sanctuary_update',
+  WAVE_STARTED: 'wave_started',
   XP_GAINED: 'xp_gained',
   LEVEL_UP: 'level_up',
   RESOURCE_GAINED: 'resource_gained',
