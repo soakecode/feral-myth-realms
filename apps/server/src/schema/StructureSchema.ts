@@ -9,4 +9,6 @@ export class StructureSchema extends Schema {
   @type('string') ownerAlias = '';
   @type('number') teamId = 0;
   @type('number') createdAt = 0;
+  @type('number') hp = 100;
+  @type('number') maxHp = 100;
 }

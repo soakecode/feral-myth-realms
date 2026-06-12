@@ -8,6 +8,9 @@ import {
   STRUCTURE_DEFS,
   HARVEST_RANGE,
   BUILD_RANGE,
+  REPAIR_RANGE,
+  REPAIR_HP,
+  REPAIR_COST_STONE,
   isBlocked,
   distance,
   clamp,
@@ -125,9 +128,27 @@ export class WorldSystem {
     s.ownerAlias = player.alias;
     s.teamId = player.teamId;
     s.createdAt = Date.now();
+    s.maxHp = def.maxHp;
+    s.hp = def.maxHp;
     structures.set(s.id, s);
 
     return { type: structureType, xp: def.xp };
+  }
+
+  /** Repair a damaged structure with stone. */
+  repair(
+    player: PlayerSchema,
+    structureId: string,
+    structures: MapSchema<StructureSchema>
+  ): { repaired: true } | { error: string } {
+    const s = structures.get(structureId);
+    if (!s) return { error: 'No existe esa construcción' };
+    if (s.hp >= s.maxHp) return { error: 'Está intacta' };
+    if (distance(player.x, player.y, s.x, s.y) > REPAIR_RANGE) return { error: 'Demasiado lejos' };
+    if (player.stone < REPAIR_COST_STONE) return { error: 'Falta piedra para reparar' };
+    player.stone -= REPAIR_COST_STONE;
+    s.hp = Math.min(s.maxHp, s.hp + REPAIR_HP);
+    return { repaired: true };
   }
 
   /** Apply ongoing structure effects (campfire/shelter heal, barracks energy). */

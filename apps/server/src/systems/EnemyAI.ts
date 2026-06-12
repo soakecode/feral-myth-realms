@@ -2,9 +2,9 @@ import { MapSchema } from '@colyseus/schema';
 import { PlayerSchema } from '../schema/PlayerSchema.js';
 import { EnemySchema } from '../schema/EnemySchema.js';
 import { StructureSchema } from '../schema/StructureSchema.js';
-import { ENEMY_DEFINITIONS, ENEMY_SPAWNS } from '@fmr/shared';
+import { ENEMY_DEFINITIONS, ENEMY_SPAWNS, STRUCTURE_DEFS } from '@fmr/shared';
 import { distance, clamp, normalize, WORLD } from '@fmr/shared';
-import type { EnemyType } from '@fmr/shared';
+import type { EnemyType, StructureType } from '@fmr/shared';
 import { CombatSystem } from './CombatSystem.js';
 import { blockedByStructure } from './WorldSystem.js';
 
@@ -69,7 +69,7 @@ export class EnemyAI {
       });
 
       if (!closest) {
-        if (eid.startsWith('wave_')) this.marchOnSanctum(enemy, def.moveSpeed, deltaMs, structures);
+        if (eid.startsWith('wave_')) this.marchOnSanctum(enemy, eid, def, deltaMs, now, structures);
         else { enemy.animState = 'idle'; enemy.targetPlayerId = ''; }
         return;
       }
@@ -80,7 +80,7 @@ export class EnemyAI {
       const targetId = closestData.id;
 
       if (dist > def.aggroRange) {
-        if (eid.startsWith('wave_')) this.marchOnSanctum(enemy, def.moveSpeed, deltaMs, structures);
+        if (eid.startsWith('wave_')) this.marchOnSanctum(enemy, eid, def, deltaMs, now, structures);
         else { enemy.animState = 'idle'; enemy.targetPlayerId = ''; }
         return;
       }
@@ -121,21 +121,47 @@ export class EnemyAI {
     return damageEvents;
   }
 
-  /** Siege behaviour: wave enemies push toward the sanctum until they find prey. */
+  /**
+   * Siege behaviour: wave enemies push toward the sanctum until they find
+   * prey — and when a wall blocks the way, they bash it down.
+   */
   private marchOnSanctum(
     enemy: EnemySchema,
-    moveSpeed: number,
+    eid: string,
+    def: { moveSpeed: number; attackDamage: number; attackCooldownMs: number },
     deltaMs: number,
+    now: number,
     structures?: MapSchema<StructureSchema>
   ) {
     const d = distance(enemy.x, enemy.y, WORLD.sanctum.x, WORLD.sanctum.y);
     if (d < WORLD.sanctum.r * 0.7) { enemy.animState = 'idle'; return; }
     const n = normalize(WORLD.sanctum.x - enemy.x, WORLD.sanctum.y - enemy.y);
     const dt = deltaMs / 1000;
-    const nx = clamp(enemy.x + n.x * moveSpeed * dt, 50, MAP_W - 50);
-    const ny = clamp(enemy.y + n.y * moveSpeed * dt, 50, MAP_H - 50);
-    if (!structures || !blockedByStructure(nx, enemy.y, 18, structures)) enemy.x = nx;
-    if (!structures || !blockedByStructure(enemy.x, ny, 18, structures)) enemy.y = ny;
+    const nx = clamp(enemy.x + n.x * def.moveSpeed * dt, 50, MAP_W - 50);
+    const ny = clamp(enemy.y + n.y * def.moveSpeed * dt, 50, MAP_H - 50);
+    let moved = false;
+    if (!structures || !blockedByStructure(nx, enemy.y, 18, structures)) { enemy.x = nx; moved = true; }
+    if (!structures || !blockedByStructure(enemy.x, ny, 18, structures)) { enemy.y = ny; moved = true; }
+    if (!moved && structures) {
+      // fully blocked: bash the nearest blocking structure
+      let target: StructureSchema | null = null;
+      let bestD = 90;
+      structures.forEach((s) => {
+        if (!STRUCTURE_DEFS[s.type as StructureType]?.blocks) return;
+        const sd = distance(enemy.x, enemy.y, s.x, s.y);
+        if (sd < bestD) { bestD = sd; target = s; }
+      });
+      if (target) {
+        const wall = target as StructureSchema;
+        enemy.animState = 'attack';
+        const last = this.lastAttackTime.get(eid) ?? 0;
+        if (now - last >= def.attackCooldownMs) {
+          this.lastAttackTime.set(eid, now);
+          wall.hp = Math.max(0, wall.hp - Math.round(def.attackDamage * this.threat));
+        }
+        return;
+      }
+    }
     enemy.animState = 'walk';
   }
 

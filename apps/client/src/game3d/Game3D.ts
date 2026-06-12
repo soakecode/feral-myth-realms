@@ -9,7 +9,7 @@ import type { Room } from '@colyseus/sdk';
 import {
   MSG, CLASS_DEFINITIONS, clamp, WORLD, ZONES, OBSTACLES, zoneAt, isBlocked,
   RESOURCE_INFO, STRUCTURE_DEFS, HARVEST_RANGE, BUILD_RANGE, distance, threatTier,
-  waveNumberAt, nextWaveAtMs,
+  waveNumberAt, nextWaveAtMs, nightFactor, REPAIR_RANGE,
 } from '@fmr/shared';
 import { AudioSystem } from './AudioSystem.js';
 import type {
@@ -81,6 +81,20 @@ export class Game3D {
   private waterMeshes: THREE.Mesh[] = [];
   private foliage: { mesh: THREE.Object3D; sway: number; phase: number }[] = [];
   private braziers: { light: THREE.PointLight; flame: THREE.Mesh; base: number; phase: number }[] = [];
+  // day/night cycle refs
+  private sunLight: THREE.DirectionalLight | null = null;
+  private hemiLight: THREE.HemisphereLight | null = null;
+  private ambLight: THREE.AmbientLight | null = null;
+  private rimLight: THREE.DirectionalLight | null = null;
+  private skyMat: THREE.MeshBasicMaterial | null = null;
+  private curNight = 0;
+  private lastNightOn = false;
+  // structure health tracking + particle bursts
+  private structHp = new Map<string, number>();
+  private bursts: Array<{ pts: THREE.Points; vel: Float32Array; age: number; ttl: number }> = [];
+  private glowTex: THREE.Texture | null = null;
+  private nearestRepairId: string | null = null;
+  private nearestRepairLabel = '';
 
   private players = new Map<string, Entity>();
   private enemies = new Map<string, Entity>();
@@ -111,6 +125,8 @@ export class Game3D {
   private yaw = 0;
   private pitch = -0.1;
   private fpWeapon: THREE.Group | null = null;
+  private fpRight: THREE.Group | null = null;
+  private fpLeft: THREE.Group | null = null;
   private fpSwing = 0;
   private fpBob = 0;
   private lookId: number | null = null;
@@ -222,9 +238,12 @@ export class Game3D {
 
     // Dark fantasy mood, but kept readable on deployed/mobile screens.
     // Contrast comes from rim light and colored props instead of crushing blacks.
-    this.scene.add(new THREE.HemisphereLight(0x8fb5da, 0x2b2119, 0.7));
-    this.scene.add(new THREE.AmbientLight(0x2f4056, 0.36));
+    this.hemiLight = new THREE.HemisphereLight(0x8fb5da, 0x2b2119, 0.7);
+    this.scene.add(this.hemiLight);
+    this.ambLight = new THREE.AmbientLight(0x2f4056, 0.36);
+    this.scene.add(this.ambLight);
     const sun = new THREE.DirectionalLight(0xd8e7ff, 1.85);
+    this.sunLight = sun;
     sun.position.set(WORLD.width * 0.34, 2500, WORLD.height * 0.04);
     sun.castShadow = true;
     sun.shadow.mapSize.set(hi ? 2048 : 1024, hi ? 2048 : 1024);
@@ -238,6 +257,7 @@ export class Game3D {
     const rim = new THREE.DirectionalLight(0x79a8ff, 0.78);
     rim.position.set(-WORLD.width * 0.2, 1500, WORLD.height * 1.15);
     this.scene.add(rim);
+    this.rimLight = rim;
 
     // Biome ground: each realm gets its own procedural tile palette so the map
     // reads as terrain instead of a flat dark sheet.
@@ -455,6 +475,7 @@ export class Game3D {
     }
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
     const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, depthWrite: false });
+    this.skyMat = mat;
     const sky = new THREE.Mesh(new THREE.SphereGeometry(5200, 48, 28), mat);
     sky.position.set(WORLD.sanctum.x, 0, WORLD.sanctum.y);
     sky.renderOrder = -1;
@@ -1245,6 +1266,11 @@ export class Game3D {
     });
     this.room.onMessage(MSG.DAMAGE_EVENT, (d: { targetId: string; amount: number; isPlayer: boolean }) => {
       this.showDamageFeedback(d.targetId, d.amount, d.isPlayer);
+      const target = d.isPlayer ? this.players.get(d.targetId) : this.enemies.get(d.targetId);
+      if (target) {
+        const p = target.group.position;
+        this.spawnBurst(p.x, 42, p.z, d.isPlayer ? 0xff5a4a : 0xffd24a, 10, 95, 5, 0.55);
+      }
       if (d.isPlayer && d.targetId === this.localId) this.audio.sfx('hurt');
       else if (!d.isPlayer) this.audio.sfx('hit');
     });
@@ -1256,6 +1282,8 @@ export class Game3D {
       if (!d.loot) { this.progressObjective('gather'); this.audio.sfx('harvest'); }
       this.chron.gathered += 1;
       const info = RESOURCE_INFO[d.type];
+      const meEnt = this.players.get(this.localId);
+      if (meEnt) this.spawnBurst(meEnt.group.position.x, 34, meEnt.group.position.z, info.color, 9, 75, 4.5, 0.55);
       this.showToast(`+1 ${info.icon} ${info.name}${d.loot ? ' (botín)' : ''}`);
     });
     this.room.onMessage(MSG.STRUCTURE_BUILT, (d: { type: StructureType; ownerId: string }) => {
@@ -1268,6 +1296,12 @@ export class Game3D {
       }
     });
     this.room.onMessage(MSG.BUILD_DENIED, (d: { reason: string }) => this.showToast(`✗ ${d.reason}`));
+    this.room.onMessage(MSG.STRUCTURE_DESTROYED, (d: { type: StructureType; x: number; y: number }) => {
+      const def = STRUCTURE_DEFS[d.type];
+      this.audio.sfx('crumble');
+      this.spawnBurst(d.x, 26, d.y, 0x9a8b73, 26, 130, 6, 0.9);
+      this.showToast(`💥 ¡${def?.name ?? 'Construcción'} derribada por el asedio!`);
+    });
     this.room.onMessage(MSG.LEVEL_UP, (d: { level: number }) => {
       this.showToast(`⭐ ¡Nivel ${d.level}! +1 punto de mejora — pulsa C`);
       this.audio.sfx('level');
@@ -1489,42 +1523,83 @@ export class Game3D {
     });
   }
 
-  /** Class weapon held in view in first person (a camera child). */
+  /** First-person rig: right arm wields the class weapon, left holds a torch. */
   private buildFpWeapon() {
     if (this.fpWeapon) return;
     const key = this.session.classKey;
     const color = CLASS_COLORS[key] ?? 0xffffff;
-    const g = new THREE.Group();
+    const container = new THREE.Group();
+    const skin = new THREE.MeshStandardMaterial({ color: 0xd8b890, roughness: 0.85 });
+    const sleeve = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.42), roughness: 0.92 });
     const wood = new THREE.MeshStandardMaterial({ color: 0x6a4a2c, roughness: 0.9 });
     const metal = new THREE.MeshStandardMaterial({ color: 0xc8d4de, roughness: 0.35, metalness: 0.5 });
     const glow = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.6, roughness: 0.3 });
+
+    const mkArm = (side: 1 | -1): THREE.Group => {
+      const arm = new THREE.Group();
+      const fore = new THREE.Mesh(new THREE.CapsuleGeometry(1.5, 7.5, 4, 12), sleeve);
+      fore.rotation.x = -1.05;
+      fore.rotation.z = side * 0.18;
+      fore.position.set(side * 0.4, -2.2, 2.6);
+      const hand = new THREE.Mesh(new THREE.SphereGeometry(1.8, 14, 10), skin);
+      hand.position.set(0, 1.4, -1.4);
+      arm.add(fore, hand);
+      arm.position.set(side * 8, -8.2, -16);
+      container.add(arm);
+      return arm;
+    };
+    this.fpRight = mkArm(1);
+    this.fpLeft = mkArm(-1);
+
+    // class weapon in the right hand
+    const weapon = new THREE.Group();
     if (key === 'wolf_guardian') {
       const blade = new THREE.Mesh(new THREE.BoxGeometry(1.2, 13, 1.8), metal);
-      blade.position.y = 8.5;
+      blade.position.y = 9.5;
       const guard = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.9, 2.2), metal);
-      guard.position.y = 2.2;
-      const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 4, 6), wood);
-      g.add(blade, guard, grip);
+      guard.position.y = 3.2;
+      const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 4, 8), wood);
+      grip.position.y = 1;
+      weapon.add(blade, guard, grip);
     } else if (key === 'fox_trickster') {
-      const blade = new THREE.Mesh(new THREE.ConeGeometry(1.1, 9, 4), metal);
-      blade.position.y = 6.5;
-      const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 3.6, 6), wood);
-      g.add(blade, grip);
+      const blade = new THREE.Mesh(new THREE.ConeGeometry(1.1, 9, 8), metal);
+      blade.position.y = 7.5;
+      const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 3.6, 8), wood);
+      grip.position.y = 1.4;
+      weapon.add(blade, grip);
     } else {
-      // druid / witch: short staff with a glowing focus
-      const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.75, 15, 7), wood);
-      staff.position.y = 4;
-      const gem = new THREE.Mesh(new THREE.OctahedronGeometry(1.7, 0), glow);
-      gem.position.y = 12.4;
+      const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.75, 16, 9), wood);
+      staff.position.y = 5;
+      const gem = new THREE.Mesh(new THREE.OctahedronGeometry(1.7, 1), glow);
+      gem.position.y = 13.6;
       const gemLight = new THREE.PointLight(color, 0.5, 60);
-      gemLight.position.y = 12.4;
-      g.add(staff, gem, gemLight);
+      gemLight.position.y = 13.6;
+      weapon.add(staff, gem, gemLight);
     }
-    g.position.set(7.5, -7.5, -18);
-    g.rotation.set(0.22, -0.28, 0.12);
-    g.visible = false;
-    this.fpWeapon = g;
-    this.camera.add(g);
+    weapon.position.set(0, 1.6, -1.4);
+    weapon.rotation.set(0.3, 0, -0.08);
+    this.fpRight.add(weapon);
+
+    // torch in the left hand — your travelling pool of light made visible
+    const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.7, 8, 8), wood);
+    stick.position.set(0, 4.4, -1.4);
+    stick.rotation.z = 0.1;
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.75, 1.6, 8), new THREE.MeshStandardMaterial({ color: 0x3a322a, roughness: 1 }));
+    cap.position.set(0, 8.2, -1.4);
+    const flame = new THREE.Mesh(
+      new THREE.ConeGeometry(1.3, 4.2, 8),
+      new THREE.MeshBasicMaterial({ color: 0xff9a3a, transparent: true, opacity: 0.95 })
+    );
+    flame.name = 'fpflame';
+    flame.position.set(0, 10.4, -1.4);
+    const torchLight = new THREE.PointLight(0xffb46a, 0.85, 90, 1.4);
+    torchLight.name = 'fptorchlight';
+    torchLight.position.set(0, 10.4, -1.4);
+    this.fpLeft.add(stick, cap, flame, torchLight);
+
+    container.visible = false;
+    this.fpWeapon = container;
+    this.camera.add(container);
   }
 
   private handleLockChange() {
@@ -1762,7 +1837,12 @@ export class Game3D {
   // ---- harvest + build ------------------------------------------------------
 
   private tryHarvest() {
-    if (this.nearestNodeId) this.room.send(MSG.HARVEST, { nodeId: this.nearestNodeId });
+    if (this.nearestNodeId) {
+      this.room.send(MSG.HARVEST, { nodeId: this.nearestNodeId });
+    } else if (this.nearestRepairId) {
+      this.room.send(MSG.REPAIR, { structureId: this.nearestRepairId });
+      this.audio.sfx('build');
+    }
   }
 
   private toggleBuildMenu() {
@@ -1857,6 +1937,72 @@ export class Game3D {
     }
   }
 
+  /** Short-lived gravity particle burst (impacts, harvests, rubble). */
+  private spawnBurst(x: number, y: number, z: number, color: number, count = 12, speed = 90, size = 5, ttl = 0.65) {
+    if (!this.glowTex) this.glowTex = this.makeGlowTexture();
+    const pos = new Float32Array(count * 3);
+    const vel = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+      const a = Math.random() * Math.PI * 2;
+      const sp = speed * (0.4 + Math.random() * 0.8);
+      vel[i * 3] = Math.cos(a) * sp;
+      vel[i * 3 + 1] = (0.45 + Math.random() * 0.9) * sp;
+      vel[i * 3 + 2] = Math.sin(a) * sp;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({
+      color, size, map: this.glowTex, transparent: true, opacity: 0.95,
+      depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true,
+    });
+    const pts = new THREE.Points(geo, mat);
+    pts.frustumCulled = false;
+    this.scene.add(pts);
+    this.bursts.push({ pts, vel, age: 0, ttl });
+  }
+
+  private updateBursts(dt: number) {
+    for (let i = this.bursts.length - 1; i >= 0; i--) {
+      const b = this.bursts[i];
+      b.age += dt;
+      const attr = b.pts.geometry.getAttribute('position') as THREE.BufferAttribute;
+      for (let j = 0; j < attr.count; j++) {
+        b.vel[j * 3 + 1] -= 260 * dt;
+        attr.setXYZ(j,
+          attr.getX(j) + b.vel[j * 3] * dt,
+          Math.max(2, attr.getY(j) + b.vel[j * 3 + 1] * dt),
+          attr.getZ(j) + b.vel[j * 3 + 2] * dt);
+      }
+      attr.needsUpdate = true;
+      (b.pts.material as THREE.PointsMaterial).opacity = Math.max(0, 0.95 * (1 - b.age / b.ttl));
+      if (b.age >= b.ttl) {
+        this.scene.remove(b.pts);
+        b.pts.geometry.dispose();
+        (b.pts.material as THREE.PointsMaterial).dispose();
+        this.bursts.splice(i, 1);
+      }
+    }
+  }
+
+  /** Day/night: lights, fog and sky follow the shared cycle (night = siege). */
+  private applyDayNight(nf: number, time: number) {
+    this.curNight = nf;
+    if (this.sunLight) this.sunLight.intensity = 1.85 - nf * 1.45;
+    if (this.hemiLight) this.hemiLight.intensity = 0.7 - nf * 0.46;
+    if (this.ambLight) this.ambLight.intensity = 0.36 - nf * 0.2;
+    if (this.rimLight) this.rimLight.intensity = 0.78 - nf * 0.4;
+    const fog = this.scene.fog as THREE.FogExp2 | null;
+    if (fog && 'density' in fog) fog.density = 0.00082 + nf * 0.0005;
+    if (this.skyMat) this.skyMat.color.setScalar(1 - nf * 0.52);
+    void time;
+    const nightOn = nf > 0.55;
+    if (nightOn !== this.lastNightOn) {
+      this.lastNightOn = nightOn;
+      this.showZoneBanner(nightOn ? '🌙 Cae la noche…' : '🌅 Amanece sobre el reino', nightOn ? '#9fb8ff' : '#ffd98a');
+    }
+  }
+
   private animateAmbient(time: number) {
     for (const f of this.foliage) {
       f.mesh.rotation.z = Math.sin(time * 0.8 + f.phase) * f.sway;
@@ -1876,11 +2022,13 @@ export class Game3D {
           base[i * 3 + 2] + Math.sin(time * 0.3 + phase[i]) * 10);
       }
       attr.needsUpdate = true;
-      (this.fireflies.material as THREE.PointsMaterial).opacity = 0.7 + Math.sin(time * 2) * 0.15;
+      // fireflies come alive at night
+      (this.fireflies.material as THREE.PointsMaterial).opacity = (0.7 + Math.sin(time * 2) * 0.15) * (0.45 + 0.55 * this.curNight);
     }
     for (const b of this.braziers) {
       const f = 0.78 + Math.sin(time * 11 + b.phase) * 0.13 + Math.sin(time * 23 + b.phase) * 0.06;
-      b.light.intensity = b.base * f;
+      // braziers burn brighter under night skies
+      b.light.intensity = b.base * f * (1 + 0.5 * this.curNight);
       const sc = 0.85 + f * 0.3;
       b.flame.scale.set(sc, 1 + (f - 0.8) * 1.7, sc);
     }
@@ -1987,20 +2135,32 @@ export class Game3D {
       const hit = new THREE.Vector3();
       if (this.raycaster.ray.intersectPlane(this.groundPlane, hit)) this.aim.copy(hit);
       else this.aim.set(me.group.position.x + dir.x * 400, 0, me.group.position.z + dir.z * 400);
-      // viewmodel: idle sway, walk bob, attack swing
+      // viewmodel: arm sway + walk bob, right-arm attack swing, torch flicker
       if (this.fpWeapon) {
         this.fpWeapon.position.set(
-          7.5 + Math.sin(stride) * 0.45,
-          -7.5 + Math.abs(Math.cos(stride)) * 0.55 + Math.sin(time * 1.7) * 0.16,
-          -18
+          Math.sin(stride) * 0.4,
+          Math.abs(Math.cos(stride)) * 0.5 + Math.sin(time * 1.7) * 0.15,
+          0
         );
-        if (this.fpSwing > 0) {
-          this.fpSwing = Math.max(0, this.fpSwing - dt * 4.2);
-          const a = Math.sin((1 - this.fpSwing) * Math.PI);
-          this.fpWeapon.rotation.set(0.22 - a * 1.25, -0.28 + a * 0.4, 0.12);
-        } else {
-          this.fpWeapon.rotation.set(0.22, -0.28, 0.12);
+        if (this.fpRight) {
+          if (this.fpSwing > 0) {
+            this.fpSwing = Math.max(0, this.fpSwing - dt * 4.2);
+            const a = Math.sin((1 - this.fpSwing) * Math.PI);
+            this.fpRight.rotation.set(-a * 1.35, a * 0.35, 0);
+            this.fpRight.position.z = -16 + a * 3.5;
+          } else {
+            this.fpRight.rotation.set(Math.sin(stride) * 0.05, 0, 0);
+            this.fpRight.position.z = -16;
+          }
         }
+        if (this.fpLeft) this.fpLeft.rotation.x = Math.sin(stride + Math.PI) * 0.05;
+        const fl = this.fpWeapon.getObjectByName('fpflame');
+        if (fl) {
+          const k = 0.85 + Math.sin(time * 12.7) * 0.18 + Math.sin(time * 23) * 0.08;
+          fl.scale.set(k, 1 + (k - 0.85) * 1.5, k);
+        }
+        const tl = this.fpWeapon.getObjectByName('fptorchlight') as THREE.PointLight | null;
+        if (tl) tl.intensity = (0.7 + 0.45 * this.curNight) * (0.85 + 0.25 * Math.sin(time * 11.3));
       }
     } else if (this.cameraMode === 'third' && me) {
       const ang = me.group.rotation.y;
@@ -2025,6 +2185,19 @@ export class Game3D {
       if (input) this.room.send(MSG.PLAYER_INPUT, input);
     }
 
+    // Day/night cycle (night falls with each siege wave)
+    this.applyDayNight(nightFactor(state.elapsedMs ?? 0), time);
+
+    // Structure damage feedback: rubble sparks when sieges chip at walls
+    state.structures?.forEach((s, id) => {
+      const prev = this.structHp.get(id);
+      if (prev !== undefined && s.hp < prev) {
+        this.spawnBurst(s.x, 30, s.y, 0xb0a48c, 8, 80, 4.5, 0.5);
+      }
+      this.structHp.set(id, s.hp);
+    });
+
+    this.updateBursts(dt);
     this.animateAmbient(time);
     this.updateHUD();
     if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
@@ -2043,6 +2216,20 @@ export class Game3D {
       if (!n.available) return;
       const d = distance(mx, mz, n.x, n.y);
       if (d < bestD) { bestD = d; this.nearestNodeId = id; this.nearestNodeType = n.type as ResourceType; }
+    });
+
+    // nearest damaged structure (repairable with stone)
+    this.nearestRepairId = null;
+    let bestR = REPAIR_RANGE * 0.9;
+    state.structures?.forEach((s, id) => {
+      if (s.hp >= s.maxHp) return;
+      const d = distance(mx, mz, s.x, s.y);
+      if (d < bestR) {
+        bestR = d;
+        this.nearestRepairId = id;
+        const def = STRUCTURE_DEFS[s.type as StructureType];
+        this.nearestRepairLabel = `${def?.name ?? s.type} ${Math.round((s.hp / s.maxHp) * 100)}%`;
+      }
     });
 
     // build ghost follows clamped aim, tinted by validity (range only client-side)
@@ -2585,7 +2772,7 @@ export class Game3D {
 
     // Threat ("la máquina") — derived from elapsedMs on both sides.
     const tTier = threatTier(state.elapsedMs ?? 0);
-    set('threat3d', romanNumeral(tTier + 1));
+    set('threat3d', romanNumeral(tTier + 1) + (this.curNight > 0.5 ? ' 🌙' : ''));
     if (tTier > this.lastThreatTier) {
       this.lastThreatTier = tTier;
       this.showToast(`☠️ La corrupción se intensifica — Amenaza ${romanNumeral(tTier + 1)}`);
@@ -2634,6 +2821,9 @@ export class Game3D {
           : this.nearestNodeType === 'rune_shard' ? '◈ Extraer runa'
           : '✦ Recoger esencia';
         hint.style.display = 'block'; hint.textContent = `F · ${verb}`;
+      }
+      else if (this.nearestRepairId) {
+        hint.style.display = 'block'; hint.textContent = `F · 🔧 Reparar ${this.nearestRepairLabel} (1🪨)`;
       }
       else hint.style.display = 'none';
     }
@@ -2756,6 +2946,13 @@ export class Game3D {
     if (this.buildGhost) disposeSingleMesh(this.buildGhost);
     if (this.moveMarker) disposeSingleMesh(this.moveMarker);
     if (this.fpWeapon) disposeGroup(this.fpWeapon);
+    for (const b of this.bursts) {
+      this.scene.remove(b.pts);
+      b.pts.geometry.dispose();
+      (b.pts.material as THREE.PointsMaterial).dispose();
+    }
+    this.bursts.length = 0;
+    this.glowTex?.dispose();
     this.texBark?.dispose();
     this.texStone?.dispose();
     if (this.fireflies) disposeGroup(this.fireflies);

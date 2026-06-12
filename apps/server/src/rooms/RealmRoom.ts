@@ -12,7 +12,7 @@ import { validateSupabaseToken } from '../auth/validateToken.js';
 import { persistMatchResult, incrementPlayerStats, updateCharacterXp } from '../db/supabase.js';
 import {
   CLASS_DEFINITIONS, CHAT_MAX_LENGTH, ALIAS_MAX_LENGTH, TICK_MS, ENERGY_REGEN_PER_TICK,
-  WORLD, XP_PER_ENEMY_KILL, HARVEST_COOLDOWN_MS, threatMultiplier,
+  WORLD, XP_PER_ENEMY_KILL, HARVEST_COOLDOWN_MS, threatMultiplier, nightFactor,
 } from '@fmr/shared';
 import { sanitizeAlias, clamp, generateRoomCode, isBlocked, slowFactorAt, levelFromXp, distance } from '@fmr/shared';
 import { MSG } from '@fmr/shared';
@@ -94,6 +94,13 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
         this.awardXp(client.sessionId, res.xp);
         client.send(MSG.RESOURCE_GAINED, { type: res.type, amount: res.amount });
       }
+    });
+
+    this.onMessage(MSG.REPAIR, (client, payload: { structureId: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || !player.isAlive) return;
+      const result = this.world.repair(player, String(payload?.structureId ?? ''), this.state.structures);
+      if ('error' in result) client.send(MSG.BUILD_DENIED, { reason: result.error });
     });
 
     this.onMessage(MSG.PERK_CHOICE, (client, payload: { perk: string }) => {
@@ -270,8 +277,9 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
       }
     });
 
-    // Threat escalation: "la máquina" presses harder as the realm endures.
-    this.enemyAI.setThreat(threatMultiplier(this.state.elapsedMs));
+    // Threat escalation: "la máquina" presses harder as the realm endures —
+    // and harder still under cover of night (+35% at deep night).
+    this.enemyAI.setThreat(threatMultiplier(this.state.elapsedMs) * (1 + 0.35 * nightFactor(this.state.elapsedMs)));
 
     // Siege waves: hordes spawn at the edges and march on the sanctum.
     const wave = this.waves.maybeSpawn(this.state.elapsedMs, this.state.enemies, threatMultiplier(this.state.elapsedMs));
@@ -308,6 +316,16 @@ export class RealmRoom extends Room<{ state: RealmRoomState }> {
 
     // Sanctuary tick
     tickSanctuaries(this.state.sanctuaries, this.state.players, deltaMs);
+
+    // Structures torn down by the siege collapse and leave the world.
+    const fallen: Array<{ id: string; type: string; x: number; y: number }> = [];
+    this.state.structures.forEach((s: StructureSchema, id: string) => {
+      if (s.hp <= 0) fallen.push({ id, type: s.type, x: s.x, y: s.y });
+    });
+    for (const f of fallen) {
+      this.state.structures.delete(f.id);
+      this.broadcast(MSG.STRUCTURE_DESTROYED, { type: f.type, x: f.x, y: f.y });
+    }
 
     // World tick: resource respawns + structure effects (campfire heal)
     this.world.tickResources(this.state.resources, deltaMs);

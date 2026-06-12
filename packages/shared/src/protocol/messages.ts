@@ -10,6 +10,7 @@ export const MSG = {
   READY: 'ready',
   HARVEST: 'harvest',
   BUILD: 'build',
+  REPAIR: 'repair',
   PERK_CHOICE: 'perk_choice',
 
   // Server → Client
@@ -26,6 +27,7 @@ export const MSG = {
   LEVEL_UP: 'level_up',
   RESOURCE_GAINED: 'resource_gained',
   STRUCTURE_BUILT: 'structure_built',
+  STRUCTURE_DESTROYED: 'structure_destroyed',
   BUILD_DENIED: 'build_denied',
   ZONE_ENTERED: 'zone_entered',
   MATCH_END: 'match_end',

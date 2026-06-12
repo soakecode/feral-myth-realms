@@ -253,6 +253,7 @@ export interface StructureDef {
   color: number;
   cost: Partial<Record<ResourceType, number>>;
   radius: number; // footprint / effect radius
+  maxHp: number; // sieges can tear structures down; repair with stone
   healPerTick?: number; // campfire / shelter
   energyPerTick?: number; // barracks (training stamina)
   revealRadius?: number; // totem
@@ -261,34 +262,38 @@ export interface StructureDef {
   xp: number;
 }
 
+export const REPAIR_RANGE = 130;
+export const REPAIR_HP = 60;
+export const REPAIR_COST_STONE = 1;
+
 export const STRUCTURE_DEFS: Record<StructureType, StructureDef> = {
   campfire: {
     type: 'campfire', name: 'Hoguera', desc: 'Cura a los aliados cercanos.', icon: '🔥', color: 0xff7a30,
-    cost: { wood: 3, essence: 2 }, radius: 200, healPerTick: 0.8, xp: 15,
+    cost: { wood: 3, essence: 2 }, radius: 200, maxHp: 80, healPerTick: 0.8, xp: 15,
   },
   totem: {
     type: 'totem', name: 'Tótem rúnico', desc: 'Marca la zona y revela el área.', icon: '🗿', color: 0x9a6cff,
-    cost: { stone: 3, essence: 2 }, radius: 60, revealRadius: 520, xp: 15,
+    cost: { stone: 3, essence: 2 }, radius: 60, maxHp: 100, revealRadius: 520, xp: 15,
   },
   ward: {
     type: 'ward', name: 'Guarda espiritual', desc: 'Zona protegida (próxima fase).', icon: '🛡️', color: 0x4fd6c6,
-    cost: { stone: 2, rune_shard: 1 }, radius: 90, xp: 20,
+    cost: { stone: 2, rune_shard: 1 }, radius: 90, maxHp: 100, xp: 20,
   },
   bridge: {
     type: 'bridge', name: 'Puente', desc: 'Cruza el agua (próxima fase).', icon: '🌉', color: 0x9a6a3a,
-    cost: { wood: 2, stone: 2 }, radius: 80, xp: 10,
+    cost: { wood: 2, stone: 2 }, radius: 80, maxHp: 120, xp: 10,
   },
   wall: {
     type: 'wall', name: 'Muro', desc: 'Barrera defensiva: arrastra para alzar una muralla mientras tengas piedra.', icon: '🧱', color: 0x9a8b73,
-    cost: { stone: 1 }, radius: 46, blocks: true, xp: 4,
+    cost: { stone: 1 }, radius: 46, maxHp: 140, blocks: true, xp: 4,
   },
   barracks: {
     type: 'barracks', name: 'Campamento de entrenamiento', desc: 'Restaura energía a los aliados cercanos.', icon: '🏕️', color: 0xc06a2a,
-    cost: { wood: 4, stone: 2 }, radius: 220, energyPerTick: 0.7, xp: 20,
+    cost: { wood: 4, stone: 2 }, radius: 220, maxHp: 160, energyPerTick: 0.7, xp: 20,
   },
   shelter: {
     type: 'shelter', name: 'Refugio', desc: 'Cura y reaparición avanzada para el reino.', icon: '🏠', color: 0x6fa8dc,
-    cost: { wood: 4, essence: 2 }, radius: 240, healPerTick: 0.5, respawn: true, xp: 25,
+    cost: { wood: 4, essence: 2 }, radius: 240, maxHp: 200, healPerTick: 0.5, respawn: true, xp: 25,
   },
 };
 
@@ -327,4 +332,28 @@ export function waveNumberAt(elapsedMs: number): number {
 /** Absolute elapsedMs at which the next wave will start. */
 export function nextWaveAtMs(elapsedMs: number): number {
   return WAVE_FIRST_AT_MS + waveNumberAt(elapsedMs) * WAVE_INTERVAL_MS;
+}
+
+// ---- Day / night cycle ------------------------------------------------------
+// Night falls exactly when each siege wave spawns: darkness and the horde are
+// one event. Both sides derive the phase from elapsedMs.
+
+export const NIGHT_DURATION_MS = 90 * 1000;
+
+/** 0 = full day, 1 = deep night, smooth ramps. */
+export function nightFactor(elapsedMs: number): number {
+  const w = waveNumberAt(elapsedMs);
+  const rampMs = 12000;
+  if (w === 0) {
+    const toFirst = WAVE_FIRST_AT_MS - elapsedMs;
+    return toFirst < rampMs ? 1 - toFirst / rampMs : 0;
+  }
+  const lastWaveAt = WAVE_FIRST_AT_MS + (w - 1) * WAVE_INTERVAL_MS;
+  const since = elapsedMs - lastWaveAt;
+  if (since < NIGHT_DURATION_MS) {
+    const fadeOut = Math.min(1, (NIGHT_DURATION_MS - since) / 15000);
+    return Math.min(1, fadeOut);
+  }
+  const toNext = lastWaveAt + WAVE_INTERVAL_MS - elapsedMs;
+  return toNext < rampMs ? 1 - toNext / rampMs : 0;
 }

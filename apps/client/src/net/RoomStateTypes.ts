@@ -59,6 +59,8 @@ export interface StructureState {
   ownerAlias: string;
   teamId: number;
   createdAt: number;
+  hp: number;
+  maxHp: number;
 }
 
 export interface UnitState {

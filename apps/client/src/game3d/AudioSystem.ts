@@ -7,7 +7,7 @@
 
 export type SfxName =
   | 'attack' | 'ability' | 'hit' | 'hurt' | 'harvest' | 'build'
-  | 'level' | 'perk' | 'horn' | 'die' | 'click';
+  | 'level' | 'perk' | 'horn' | 'die' | 'click' | 'crumble';
 
 const MUTE_KEY = 'fmr_muted';
 
@@ -156,6 +156,10 @@ export class AudioSystem {
         this.noiseBurst(t, 0.22, 600, 0.2, 'lowpass');
         break;
       case 'click': this.tone(t, 1250, 1250, 0.03, 'square', 0.12); break;
+      case 'crumble':
+        this.noiseBurst(t, 0.5, 240, 0.55, 'lowpass');
+        this.tone(t, 140, 38, 0.45, 'sawtooth', 0.25);
+        break;
     }
   }
 
