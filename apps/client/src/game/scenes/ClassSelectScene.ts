@@ -5,7 +5,7 @@ import { CLASS_DEFINITIONS } from '@fmr/shared';
 import type { PlayerClass } from '@fmr/shared';
 import type { PlayerSession } from '../../auth/sessionStore.js';
 import { saveSession } from '../../auth/sessionStore.js';
-import { getClassPortrait } from '../../ui/portraits.js';
+import { getClassPortrait, loadClassPortrait } from '../../ui/portraits.js';
 
 const CLASS_ORDER: PlayerClass[] = ['stag_druid', 'raven_witch', 'wolf_guardian', 'fox_trickster'];
 
@@ -73,7 +73,7 @@ export class ClassSelectScene extends Phaser.Scene {
         <div class="class-card ${isSelected ? 'selected' : ''}" data-class="${key}"
           style="--class-color:${colorHex};--class-bg:${CLASS_BG[key]}">
           <div class="class-portrait" aria-hidden="true">
-            <img src="${getClassPortrait(key)}" alt="${t(CLASS_NAME_KEYS[key])}" />
+            <img data-pk="${key}" src="${getClassPortrait(key)}" alt="${t(CLASS_NAME_KEYS[key])}" />
           </div>
           <div class="class-name">${t(CLASS_NAME_KEYS[key])}</div>
           <div class="class-role">${t(CLASS_ROLE_KEYS[key])}</div>
@@ -192,6 +192,14 @@ export class ClassSelectScene extends Phaser.Scene {
         card.classList.add('selected');
       });
     });
+
+    // Upgrade portraits to the professional GLB renders as they load.
+    for (const key of CLASS_ORDER) {
+      void loadClassPortrait(key).then((src) => {
+        const img = overlay.querySelector<HTMLImageElement>(`img[data-pk="${key}"]`);
+        if (img) img.src = src;
+      });
+    }
 
     document.getElementById('btn-confirm')?.addEventListener('click', () => {
       const updatedSession = { ...this.session, classKey: this.selected };

@@ -40,9 +40,9 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        // Don't precache the large concept-art styleboards (~2MB each); they
-        // load on demand as backgrounds / references.
-        globIgnores: ['**/assets/concept/**'],
+        // Don't precache the GLB character models (~3-5MB each); they load on
+        // demand and the browser HTTP cache keeps them.
+        globIgnores: ['**/assets/concept/**', '**/models/**'],
         // The Three.js bundle pushes the main chunk past the 2 MiB default.
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         runtimeCaching: [

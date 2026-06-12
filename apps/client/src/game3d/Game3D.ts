@@ -15,6 +15,8 @@ import {
 import { AudioSystem } from './AudioSystem.js';
 import { buildHeroMesh, CLASS_COLORS } from './heroMesh.js';
 import type { Rig } from './heroMesh.js';
+import { HERO_MODELS, ENEMY_MODELS, ENEMY_MODEL_HEIGHTS, instantiateModel, preloadModel } from './models.js';
+import type { RiggedActions } from './models.js';
 import type {
   PlayerClass, AbilityKey, PlayerInputPayload, ResourceType, StructureType,
 } from '@fmr/shared';
@@ -47,6 +49,12 @@ interface Entity {
   label?: Label;
   rig?: Rig;
   lastPos?: THREE.Vector3;
+  // skeletal-animation state (GLB models)
+  mixer?: THREE.AnimationMixer;
+  actions?: RiggedActions;
+  animName?: 'idle' | 'walk';
+  serverAnim?: string;
+  lastAttackPlay?: number;
 }
 
 interface Objective {
@@ -212,6 +220,10 @@ export class Game3D {
     window.addEventListener('keyup', this.onKeyUp);
     document.addEventListener('pointerlockchange', this.onLockChange);
     document.addEventListener('mousemove', this.onMouseLook);
+
+    // Warm the model cache: this hero's class plus the common foes.
+    void preloadModel(HERO_MODELS[this.session.classKey] ?? HERO_MODELS.stag_druid);
+    for (const url of Object.values(ENEMY_MODELS)) void preloadModel(url);
 
     this.loop();
   }
@@ -1157,20 +1169,40 @@ export class Game3D {
     const addPlayer = (p: RealmRoomState['players'] extends Map<string, infer P> ? P : never, id: string) => {
       if (this.players.has(id)) return;
       const isLocal = id === this.localId;
-      const group = buildHeroMesh(p.classKey, isLocal);
+      const color = CLASS_COLORS[p.classKey] ?? 0xffffff;
+      const group = new THREE.Group();
       group.position.set(p.x, 0, p.y);
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(15, 19, 24),
+        new THREE.MeshBasicMaterial({ color: isLocal ? 0xffe082 : color, transparent: true, opacity: 0.85, side: THREE.DoubleSide })
+      );
+      ring.rotation.x = -Math.PI / 2; ring.position.y = 1; group.add(ring);
       if (isLocal) {
         // Hero torch: a warm pool of light that travels with you (Diablo mood).
         const torch = new THREE.PointLight(0xffb46a, 1.9, 340, 1.6);
         torch.position.set(0, 62, 0);
         group.add(torch);
       }
-      const rig = group.userData.rig as Rig | undefined;
       const label = this.makeLabel();
       label.sprite.position.set(0, 66, 0);
       group.add(label.sprite);
       this.scene.add(group);
-      this.players.set(id, { group, target: new THREE.Vector3(p.x, 0, p.y), faceTarget: 0, kind: 'player', name: p.alias, label, rig, lastPos: new THREE.Vector3(p.x, 0, p.y) });
+      const entity: Entity = { group, target: new THREE.Vector3(p.x, 0, p.y), faceTarget: 0, kind: 'player', name: p.alias, label, lastPos: new THREE.Vector3(p.x, 0, p.y) };
+      this.players.set(id, entity);
+      // Professional rigged model (KayKit); procedural hero only as fallback.
+      void instantiateModel(HERO_MODELS[p.classKey] ?? HERO_MODELS.stag_druid, 46).then((ri) => {
+        if (this.disposed || this.players.get(id) !== entity) return;
+        if (ri) {
+          group.add(ri.group);
+          entity.mixer = ri.mixer;
+          entity.actions = ri.actions;
+          if (isLocal && this.cameraMode === 'first') this.setLocalMeshHidden(true);
+        } else {
+          const body = buildHeroMesh(p.classKey, isLocal, false);
+          entity.rig = body.userData.rig as Rig;
+          group.add(body);
+        }
+      });
       if (isLocal) { this.camTarget.set(p.x, 0, p.y); this.aim.set(p.x, 0, p.y); }
     };
     const removePlayer = (_p: unknown, id: string) => {
@@ -1193,7 +1225,7 @@ export class Game3D {
     if (this.mode === 'realm') {
       const addEnemy = (en: RealmRoomState['enemies'] extends Map<string, infer E> ? E : never, id: string) => {
         if (this.enemies.has(id)) return;
-        const group = this.createEnemyMesh(en.type);
+        const group = new THREE.Group();
         group.position.set(en.x, 0, en.y);
         group.userData.pick = { kind: 'enemy', id };
         group.visible = en.isAlive;
@@ -1201,7 +1233,25 @@ export class Game3D {
         label.sprite.position.set(0, 64, 0);
         group.add(label.sprite);
         this.scene.add(group);
-        this.enemies.set(id, { group, target: new THREE.Vector3(en.x, 0, en.y), faceTarget: 0, kind: 'enemy', type: en.type, name: ENEMY_NAMES[en.type] ?? en.type, bob: Math.random() * 6, label });
+        const entity: Entity = { group, target: new THREE.Vector3(en.x, 0, en.y), faceTarget: 0, kind: 'enemy', type: en.type, name: ENEMY_NAMES[en.type] ?? en.type, bob: Math.random() * 6, label, lastPos: new THREE.Vector3(en.x, 0, en.y) };
+        this.enemies.set(id, entity);
+        const modelUrl = ENEMY_MODELS[en.type];
+        if (modelUrl) {
+          void instantiateModel(modelUrl, ENEMY_MODEL_HEIGHTS[en.type] ?? 48).then((ri) => {
+            if (this.disposed || this.enemies.get(id) !== entity) return;
+            if (ri) {
+              group.add(ri.group);
+              entity.mixer = ri.mixer;
+              entity.actions = ri.actions;
+              entity.bob = undefined; // rigged models don't hover-bob or spin
+            } else {
+              group.add(this.createEnemyMesh(en.type));
+            }
+          });
+        } else {
+          // wisp: a glowing spirit — the procedural ethereal look fits it
+          group.add(this.createEnemyMesh(en.type));
+        }
       };
       const removeEnemy = (_en: unknown, id: string) => {
         const e = this.enemies.get(id);
@@ -1935,12 +1985,43 @@ export class Game3D {
 
   // ---- loop -----------------------------------------------------------------
 
+  /** Crossfade idle/walk + one-shot attacks on a GLB skeletal model. */
+  private driveMixer(e: Entity, moving: boolean, speed: number, dt: number) {
+    if (!e.mixer || !e.actions) return;
+    const desired: 'idle' | 'walk' = moving ? 'walk' : 'idle';
+    if (e.animName !== desired) {
+      const next = e.actions[desired] ?? e.actions.idle;
+      const prev = e.animName ? e.actions[e.animName] : undefined;
+      if (next && next !== prev) {
+        next.reset().fadeIn(0.16).play();
+        prev?.fadeOut(0.16);
+      }
+      e.animName = desired;
+    }
+    if (e.actions.walk && moving) e.actions.walk.timeScale = clamp(speed / 150, 0.7, 1.8);
+    if (e.serverAnim === 'attack' && e.actions.attack) {
+      const nowMs = performance.now();
+      if (nowMs - (e.lastAttackPlay ?? 0) > 650) {
+        e.lastAttackPlay = nowMs;
+        e.actions.attack.reset().fadeIn(0.06).play();
+      }
+    }
+    e.mixer.update(dt);
+  }
+
   private animateRig(e: Entity, dt: number, time: number) {
-    const rig = e.rig; if (!rig) return;
     const cur = e.group.position;
     if (!e.lastPos) e.lastPos = cur.clone();
-    const dx = cur.x - e.lastPos.x, dz = cur.z - e.lastPos.z;
-    const speed = Math.hypot(dx, dz) / Math.max(dt, 0.001);
+    const pdx = cur.x - e.lastPos.x, pdz = cur.z - e.lastPos.z;
+    const pSpeed = Math.hypot(pdx, pdz) / Math.max(dt, 0.001);
+    if (e.mixer) {
+      e.lastPos.set(cur.x, cur.y, cur.z);
+      cur.y = 0;
+      this.driveMixer(e, pSpeed > 8, pSpeed, dt);
+      return;
+    }
+    const rig = e.rig; if (!rig) return;
+    const speed = pSpeed;
     e.lastPos.set(cur.x, cur.y, cur.z);
     const moving = speed > 8;
     const amt = Math.min(speed / 170, 1);
@@ -2075,6 +2156,7 @@ export class Game3D {
       if (!e) return;
       e.target.set(p.x, 0, p.y);
       e.group.visible = p.isAlive;
+      e.serverAnim = p.animState;
       e.faceTarget = p.direction === 'up' ? Math.PI : p.direction === 'left' ? -Math.PI / 2 : p.direction === 'right' ? Math.PI / 2 : 0;
       if (e.label) this.drawLabel(e.label, p.alias, clamp(p.hp / p.maxHp, 0, 1), id === this.localId ? '#ffe082' : '#cfe8ff');
     });
@@ -2083,6 +2165,7 @@ export class Game3D {
       if (!e) return;
       e.target.set(en.x, 0, en.y);
       e.group.visible = en.isAlive;
+      e.serverAnim = en.animState;
       if (e.label) {
         e.label.sprite.visible = en.isAlive;
         this.drawLabel(e.label, e.name ?? 'Enemy', clamp(en.hp / en.maxHp, 0, 1), '#ffd2d2');
@@ -2111,6 +2194,13 @@ export class Game3D {
       const dx = e.group.position.x - oldX;
       const dz = e.group.position.z - oldZ;
       if (Math.hypot(dx, dz) > 0.03) e.faceTarget = Math.atan2(dx, dz);
+      if (e.mixer) {
+        // rigged skeleton: walk/idle/attack clips, face the way it moves
+        e.group.rotation.y = lerpAngle(e.group.rotation.y, e.faceTarget, 1 - Math.pow(0.0012, dt));
+        const sp = Math.hypot(dx, dz) / Math.max(dt, 0.001);
+        this.driveMixer(e, sp > 6, sp, dt);
+        return;
+      }
       if (e.bob !== undefined) { e.bob += dt * 3; e.group.position.y = e.type === 'wisp' ? Math.sin(e.bob) * 6 + 4 : Math.sin(e.bob) * 2; }
       const pulse = 1 + Math.sin(time * (e.type === 'bramble_beast' ? 3.2 : 5.2) + e.group.position.x * 0.02) * 0.035;
       e.group.scale.set(pulse, pulse, pulse);

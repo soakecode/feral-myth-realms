@@ -12,7 +12,7 @@ import {
 import { ENV } from '../../config/env.js';
 import type { PlayerSession } from '../../auth/sessionStore.js';
 import { gothicScreen } from '../../ui/theme.js';
-import { getClassPortrait } from '../../ui/portraits.js';
+import { getClassPortrait, loadClassPortrait } from '../../ui/portraits.js';
 
 const JOIN_TIMEOUT_MS = 12000;
 
@@ -110,7 +110,7 @@ export class LobbyScene extends Phaser.Scene {
         <p class="gsub">Reúne a tu hueste o adéntrate en solitario</p>
 
         <div class="player-badge">
-          <span class="player-portrait"><img src="${getClassPortrait(this.session.classKey)}" alt="" /></span>
+          <span class="player-portrait"><img id="lobby-portrait" src="${getClassPortrait(this.session.classKey)}" alt="" /></span>
           <strong>${this.session.alias}</strong>
           <span class="badge-mode">${this.session.mode === 'registered' ? '✓ Registrado' : 'Invitado'}</span>
         </div>
@@ -153,6 +153,11 @@ export class LobbyScene extends Phaser.Scene {
     });
     document.getElementById('btn-back')?.addEventListener('click', () => {
       this.scene.start('MainMenuScene');
+    });
+
+    void loadClassPortrait(this.session.classKey).then((src) => {
+      const img = document.getElementById('lobby-portrait') as HTMLImageElement | null;
+      if (img) img.src = src;
     });
 
     // Room list join buttons
