@@ -11,15 +11,8 @@ import {
 } from '../../net/ColyseusClient.js';
 import { ENV } from '../../config/env.js';
 import type { PlayerSession } from '../../auth/sessionStore.js';
-import { assetManifest } from '../../assets/assetManifest.js';
 import { gothicScreen } from '../../ui/theme.js';
-
-const CLASS_ART_POSITIONS: Record<string, string> = {
-  stag_druid: '0% 0%',
-  raven_witch: '33.3% 0%',
-  wolf_guardian: '66.6% 0%',
-  fox_trickster: '100% 0%',
-};
+import { getClassPortrait } from '../../ui/portraits.js';
 
 const JOIN_TIMEOUT_MS = 12000;
 
@@ -84,10 +77,11 @@ export class LobbyScene extends Phaser.Scene {
       <style>
         #lobby-scene .player-badge{display:flex;align-items:center;gap:10px;padding:8px 12px;margin-bottom:6px;
           background:rgba(255,216,138,.06);border:1px solid rgba(255,216,138,.22);border-radius:10px;font-size:13px}
-        #lobby-scene .player-portrait{width:44px;height:44px;flex:0 0 44px;border-radius:50%;
-          background-image:url('${assetManifest.concept.charactersClasses}');background-size:400% auto;
-          background-position:${CLASS_ART_POSITIONS[this.session.classKey] ?? '0% 0%'};
-          border:1px solid ${classColor};box-shadow:0 0 18px ${classColor}55}
+        #lobby-scene .player-portrait{width:44px;height:44px;flex:0 0 44px;border-radius:50%;overflow:hidden;
+          background:radial-gradient(circle at 50% 30%,${classColor}33,#0a0d12 75%);
+          border:1px solid ${classColor};box-shadow:0 0 18px ${classColor}55;
+          display:flex;align-items:center;justify-content:center}
+        #lobby-scene .player-portrait img{height:54px;width:auto;margin-top:10px}
         #lobby-scene .badge-mode{margin-left:auto;font-size:10px;letter-spacing:1px;color:#a99a78;text-transform:uppercase}
         #lobby-scene .deploy-warning{background:rgba(255,170,0,.1);border:1px solid rgba(255,190,80,.3);border-radius:8px;
           padding:9px 11px;margin:8px 0 4px;color:#ffd58a;font-size:11.5px;line-height:1.4;font-family:'Segoe UI',sans-serif}
@@ -116,7 +110,7 @@ export class LobbyScene extends Phaser.Scene {
         <p class="gsub">Reúne a tu hueste o adéntrate en solitario</p>
 
         <div class="player-badge">
-          <span class="player-portrait"></span>
+          <span class="player-portrait"><img src="${getClassPortrait(this.session.classKey)}" alt="" /></span>
           <strong>${this.session.alias}</strong>
           <span class="badge-mode">${this.session.mode === 'registered' ? '✓ Registrado' : 'Invitado'}</span>
         </div>

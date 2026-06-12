@@ -5,7 +5,7 @@ import { CLASS_DEFINITIONS } from '@fmr/shared';
 import type { PlayerClass } from '@fmr/shared';
 import type { PlayerSession } from '../../auth/sessionStore.js';
 import { saveSession } from '../../auth/sessionStore.js';
-import { assetManifest } from '../../assets/assetManifest.js';
+import { getClassPortrait } from '../../ui/portraits.js';
 
 const CLASS_ORDER: PlayerClass[] = ['stag_druid', 'raven_witch', 'wolf_guardian', 'fox_trickster'];
 
@@ -23,11 +23,11 @@ const CLASS_NAME_KEYS: Record<PlayerClass, I18nKeys> = {
   fox_trickster: 'class_fox_trickster',
 };
 
-const CLASS_ART: Record<PlayerClass, { position: string; bg: string }> = {
-  stag_druid: { position: '0% 0%', bg: 'linear-gradient(180deg,rgba(73,124,55,.24),rgba(8,13,10,.9))' },
-  raven_witch: { position: '33.3% 0%', bg: 'linear-gradient(180deg,rgba(94,54,158,.25),rgba(9,7,16,.9))' },
-  wolf_guardian: { position: '66.6% 0%', bg: 'linear-gradient(180deg,rgba(58,128,170,.24),rgba(7,13,18,.92))' },
-  fox_trickster: { position: '100% 0%', bg: 'linear-gradient(180deg,rgba(190,95,27,.26),rgba(18,10,7,.9))' },
+const CLASS_BG: Record<PlayerClass, string> = {
+  stag_druid: 'radial-gradient(ellipse at 50% 28%,rgba(76,175,80,.3),rgba(8,13,10,.95) 70%)',
+  raven_witch: 'radial-gradient(ellipse at 50% 28%,rgba(124,77,255,.3),rgba(9,7,16,.95) 70%)',
+  wolf_guardian: 'radial-gradient(ellipse at 50% 28%,rgba(144,164,174,.28),rgba(7,13,18,.95) 70%)',
+  fox_trickster: 'radial-gradient(ellipse at 50% 28%,rgba(255,112,67,.3),rgba(18,10,7,.95) 70%)',
 };
 
 export class ClassSelectScene extends Phaser.Scene {
@@ -71,12 +71,9 @@ export class ClassSelectScene extends Phaser.Scene {
 
       return `
         <div class="class-card ${isSelected ? 'selected' : ''}" data-class="${key}"
-          style="--class-color:${colorHex};--portrait:url('${assetManifest.concept.charactersClasses}');--portrait-x:${CLASS_ART[key].position};--class-bg:${CLASS_ART[key].bg}">
-          <div class="class-portrait" aria-hidden="true"></div>
-          <div class="class-avatar" style="background:${colorHex}22; border-color:${colorHex}44">
-            <svg width="64" height="64" viewBox="0 0 64 64">
-              ${this.getClassSVG(key, colorHex)}
-            </svg>
+          style="--class-color:${colorHex};--class-bg:${CLASS_BG[key]}">
+          <div class="class-portrait" aria-hidden="true">
+            <img src="${getClassPortrait(key)}" alt="${t(CLASS_NAME_KEYS[key])}" />
           </div>
           <div class="class-name">${t(CLASS_NAME_KEYS[key])}</div>
           <div class="class-role">${t(CLASS_ROLE_KEYS[key])}</div>
@@ -97,8 +94,9 @@ export class ClassSelectScene extends Phaser.Scene {
           display:flex; flex-direction:column;
           align-items:center; justify-content:flex-start; overflow-y:auto;
           background:
-            linear-gradient(180deg,rgba(7,10,12,.72),rgba(7,8,12,.94)),
-            url('${assetManifest.concept.realmsBiomes}') center/cover no-repeat;
+            radial-gradient(ellipse at 50% -10%,#2c3f56 0%,rgba(20,28,40,.6) 45%,rgba(8,10,14,0) 70%),
+            radial-gradient(ellipse at 50% 115%,#1d2a1f 0%,rgba(10,14,11,.5) 40%,rgba(8,10,14,0) 70%),
+            linear-gradient(180deg,#0b1018,#080a0e);
           font-family:'Segoe UI',system-ui,sans-serif;
           color:#fff; padding:18px; box-sizing:border-box;
         }
@@ -130,17 +128,12 @@ export class ClassSelectScene extends Phaser.Scene {
         }
         .class-portrait{
           height:190px; margin:0 -12px 10px;
-          background-image:linear-gradient(180deg,rgba(0,0,0,0) 42%,rgba(8,10,14,.92) 100%),var(--portrait);
-          background-size:400% auto;
-          background-position:var(--portrait-x);
-          background-repeat:no-repeat;
-          filter:saturate(1.08) contrast(1.05);
+          display:flex; align-items:flex-end; justify-content:center;
+          background:var(--class-bg);
         }
-        .class-avatar {
-          width:62px; height:62px; border-radius:50%;
-          border:2px solid; margin:0 auto 10px;
-          display:flex; align-items:center; justify-content:center;
-          box-shadow:0 0 22px color-mix(in srgb,var(--class-color) 40%,transparent);
+        .class-portrait img{
+          height:178px; width:auto;
+          filter:drop-shadow(0 10px 18px rgba(0,0,0,.65));
         }
         .class-name { font-family:Georgia,serif; font-size:16px; font-weight:700; margin-bottom:2px; color:#f5df9a; text-transform:uppercase; letter-spacing:.5px; }
         .class-role { font-size:11px; color:#d1c19b; margin-bottom:10px; text-transform:uppercase; }
@@ -209,41 +202,6 @@ export class ClassSelectScene extends Phaser.Scene {
     document.getElementById('btn-back')?.addEventListener('click', () => {
       this.scene.start('MainMenuScene');
     });
-  }
-
-  private getClassSVG(key: PlayerClass, color: string): string {
-    switch (key) {
-      case 'stag_druid':
-        return `<circle cx="32" cy="34" r="18" fill="${color}" opacity="0.9"/>
-                <line x1="20" y1="20" x2="14" y2="6" stroke="${color}" stroke-width="3"/>
-                <line x1="20" y1="20" x2="10" y2="12" stroke="${color}" stroke-width="2.5"/>
-                <line x1="44" y1="20" x2="50" y2="6" stroke="${color}" stroke-width="3"/>
-                <line x1="44" y1="20" x2="54" y2="12" stroke="${color}" stroke-width="2.5"/>
-                <circle cx="26" cy="32" r="3" fill="white"/>
-                <circle cx="38" cy="32" r="3" fill="white"/>`;
-      case 'raven_witch':
-        return `<polygon points="32,8 56,52 8,52" fill="${color}" opacity="0.9"/>
-                <polygon points="32,44 20,28 44,28" fill="black" opacity="0.5"/>
-                <circle cx="26" cy="34" r="3" fill="#ff4444"/>
-                <circle cx="38" cy="34" r="3" fill="#ff4444"/>`;
-      case 'wolf_guardian':
-        return `<rect x="10" y="18" width="44" height="36" rx="6" fill="${color}" opacity="0.9"/>
-                <polygon points="12,20 22,4 22,20" fill="${color}"/>
-                <polygon points="52,20 42,4 42,20" fill="${color}"/>
-                <circle cx="24" cy="32" r="3.5" fill="white"/>
-                <circle cx="40" cy="32" r="3.5" fill="white"/>
-                <circle cx="24" cy="32" r="2" fill="black"/>
-                <circle cx="40" cy="32" r="2" fill="black"/>`;
-      case 'fox_trickster':
-        return `<polygon points="32,6 58,52 6,52" fill="${color}" opacity="0.9"/>
-                <circle cx="32" cy="52" r="8" fill="white" opacity="0.8"/>
-                <circle cx="24" cy="36" r="3" fill="white"/>
-                <circle cx="40" cy="36" r="3" fill="white"/>
-                <circle cx="24" cy="36" r="1.5" fill="black"/>
-                <circle cx="40" cy="36" r="1.5" fill="black"/>`;
-      default:
-        return `<circle cx="32" cy="32" r="24" fill="${color}"/>`;
-    }
   }
 
   shutdown() {

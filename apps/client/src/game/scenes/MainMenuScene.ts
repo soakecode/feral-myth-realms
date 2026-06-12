@@ -1,7 +1,6 @@
 import Phaser from 'phaser';
 import { t, setLocale, getLocale } from '../../i18n/index.js';
 import { clearSession, loadSession } from '../../auth/sessionStore.js';
-import { assetManifest } from '../../assets/assetManifest.js';
 
 export class MainMenuScene extends Phaser.Scene {
   constructor() {
@@ -18,7 +17,6 @@ export class MainMenuScene extends Phaser.Scene {
     }
 
     const session = loadSession();
-    const bg = assetManifest.concept.realmsBiomes;
 
     // Floating embers (atmosphere)
     const embers = Array.from({ length: 26 }, () => {
@@ -36,9 +34,13 @@ export class MainMenuScene extends Phaser.Scene {
         #main-menu{position:absolute;inset:0;overflow:hidden;display:flex;flex-direction:column;
           align-items:center;justify-content:center;color:#f3ead6;font-family:'Cinzel',Georgia,serif;
           background:#080b10}
-        #main-menu .bg{position:absolute;inset:-4%;background:url('${bg}') center/cover no-repeat;
-          filter:brightness(.5) saturate(1.05) contrast(1.05);transform:scale(1.06);
-          animation:kenburns 38s ease-in-out infinite alternate}
+        #main-menu .bg{position:absolute;inset:-4%;transform:scale(1.03);
+          animation:kenburns 38s ease-in-out infinite alternate;background:
+          radial-gradient(circle at 70% 14%, rgba(218,228,255,.26) 0%, rgba(150,175,220,.08) 8%, rgba(0,0,0,0) 17%),
+          radial-gradient(ellipse at 50% -14%, #2e425b 0%, rgba(26,36,50,.75) 36%, rgba(8,10,14,0) 66%),
+          radial-gradient(ellipse at 14% 110%, #182a1d 0%, rgba(15,24,17,.65) 36%, rgba(8,10,14,0) 64%),
+          radial-gradient(ellipse at 88% 106%, #2a1d11 0%, rgba(28,19,11,.55) 30%, rgba(8,10,14,0) 58%),
+          linear-gradient(180deg,#0d1320,#07090d)}
         #main-menu .grad{position:absolute;inset:0;background:
           radial-gradient(ellipse at 50% 38%,rgba(10,16,22,0) 0%,rgba(8,11,16,.55) 62%,rgba(6,8,12,.95) 100%),
           linear-gradient(180deg,rgba(6,9,14,.7) 0%,rgba(6,9,14,0) 30%,rgba(6,9,14,.85) 100%)}

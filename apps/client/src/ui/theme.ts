@@ -1,21 +1,22 @@
-import { assetManifest } from '../assets/assetManifest.js';
-
 /**
  * Shared gothic-gold design language for every full-screen panel (auth, class
- * select, lobby). Matches the main menu: concept-art backdrop, vignette,
- * Cinzel typography, ornate gold cards.
+ * select, lobby): moonlit-forest gradient backdrop, vignette, Cinzel
+ * typography, ornate gold cards.
  */
-export function gothicScreen(id: string, inner: string, opts?: { bg?: string; wide?: boolean }): string {
-  const bg = opts?.bg ?? assetManifest.concept.realmsBiomes;
+export function gothicScreen(id: string, inner: string, opts?: { wide?: boolean }): string {
   return `
     <style>
       #${id}{position:absolute;inset:0;overflow:hidden auto;display:flex;flex-direction:column;align-items:center;
         justify-content:center;font-family:'Cinzel',Georgia,serif;color:#efe4cb;background:#080b10;padding:18px;box-sizing:border-box}
-      #${id} .gbg{position:fixed;inset:-4%;background:url('${bg}') center/cover no-repeat;
-        filter:brightness(.42) saturate(1.04);transform:scale(1.05);z-index:0;animation:gkb 44s ease-in-out infinite alternate}
+      #${id} .gbg{position:fixed;inset:-4%;z-index:0;animation:gkb 44s ease-in-out infinite alternate;background:
+        radial-gradient(circle at 72% 16%, rgba(214,226,255,.22) 0%, rgba(150,175,220,.07) 9%, rgba(0,0,0,0) 18%),
+        radial-gradient(ellipse at 50% -12%, #2c3f56 0%, rgba(24,33,46,.7) 38%, rgba(8,10,14,0) 68%),
+        radial-gradient(ellipse at 18% 112%, #16241a 0%, rgba(14,22,16,.6) 36%, rgba(8,10,14,0) 66%),
+        radial-gradient(ellipse at 86% 108%, #241a10 0%, rgba(26,18,11,.5) 30%, rgba(8,10,14,0) 60%),
+        linear-gradient(180deg,#0c1119,#07090d)}
       #${id} .gvig{position:fixed;inset:0;z-index:0;pointer-events:none;background:
-        radial-gradient(ellipse at 50% 40%,rgba(8,11,16,0) 0%,rgba(8,11,16,.62) 64%,rgba(5,7,10,.96) 100%)}
-      @keyframes gkb{0%{transform:scale(1.05) translate(0,0)}100%{transform:scale(1.12) translate(-1.2%,-1.6%)}}
+        radial-gradient(ellipse at 50% 40%,rgba(8,11,16,0) 0%,rgba(8,11,16,.5) 64%,rgba(5,7,10,.94) 100%)}
+      @keyframes gkb{0%{transform:scale(1.02) translate(0,0)}100%{transform:scale(1.07) translate(-1%,-1.2%)}}
       #${id} .gcard{position:relative;z-index:1;width:${opts?.wide ? 'min(560px,94vw)' : 'min(380px,92vw)'};
         background:linear-gradient(168deg,rgba(24,19,12,.94),rgba(10,9,8,.96));
         border:1px solid rgba(255,216,138,.38);border-radius:14px;padding:26px clamp(18px,5vw,34px);

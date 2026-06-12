@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -12,15 +13,14 @@ import {
   waveNumberAt, nextWaveAtMs, nightFactor, REPAIR_RANGE,
 } from '@fmr/shared';
 import { AudioSystem } from './AudioSystem.js';
+import { buildHeroMesh, CLASS_COLORS } from './heroMesh.js';
+import type { Rig } from './heroMesh.js';
 import type {
   PlayerClass, AbilityKey, PlayerInputPayload, ResourceType, StructureType,
 } from '@fmr/shared';
 import type { RealmRoomState } from '../net/RoomStateTypes.js';
 import type { PlayerSession } from '../auth/sessionStore.js';
 
-const CLASS_COLORS: Record<string, number> = {
-  stag_druid: 0x4caf50, raven_witch: 0x7c4dff, wolf_guardian: 0x90a4ae, fox_trickster: 0xff7043,
-};
 const ENEMY_COLORS: Record<string, number> = {
   wisp: 0x4dd0e1, bramble_beast: 0x6d8f3a, rune_imp: 0xba68c8,
 };
@@ -34,18 +34,6 @@ interface Label {
   ctx: CanvasRenderingContext2D;
   tex: THREE.CanvasTexture;
   last: string;
-}
-
-interface Rig {
-  armL?: THREE.Object3D;
-  armR?: THREE.Object3D;
-  legL?: THREE.Object3D;
-  legR?: THREE.Object3D;
-  torso?: THREE.Object3D;
-  accent?: THREE.Object3D;
-  phase: number;
-  stride: number;
-  attack: number;
 }
 
 interface Entity {
@@ -321,10 +309,79 @@ export class Game3D {
       else this.scene.add(this.makeWater(o.x, o.y, o.radius));
     }
 
-    // Purely cosmetic dressing
-    if (hi) { this.scatterGrass(); this.scatterCrystals(); }
+    // Purely cosmetic dressing: dense woodland, undergrowth, crystals
+    this.scatterForest();
+    this.scatterGrass();
+    if (hi) this.scatterCrystals();
     this.addBraziers();
     this.buildAtmosphere();
+  }
+
+  /**
+   * Dense visual-only woodland (no collision): one merged trunk + one merged
+   * crown-card geometry drawn as two InstancedMeshes with per-instance biome
+   * tinting — hundreds of extra trees for two draw calls. This is what turns
+   * a scatter of props into a forest.
+   */
+  private scatterForest() {
+    const R = 30;
+    const trunkGeo = new THREE.CylinderGeometry(R * 0.15, R * 0.34, R * 2.6, 7);
+    trunkGeo.translate(0, R * 1.3, 0);
+    const cardGeos: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < 6; i++) {
+      const cg = new THREE.PlaneGeometry(R * 2.5, R * 2.0);
+      cg.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(
+        new THREE.Euler((Math.random() - 0.5) * 0.8, Math.random() * Math.PI, (Math.random() - 0.5) * 0.4)
+      ));
+      const a = (i / 6) * Math.PI * 2;
+      cg.translate(Math.cos(a) * R * 0.35, R * (2.6 + (i % 3) * 0.5), Math.sin(a) * R * 0.35);
+      cardGeos.push(cg);
+    }
+    const crownGeo = mergeGeometries(cardGeos);
+    if (!crownGeo) return;
+    const count = this.quality === 'high' ? 420 : 150;
+    const trunkInst = new THREE.InstancedMesh(
+      trunkGeo,
+      new THREE.MeshStandardMaterial({ color: 0x5b4634, roughness: 1, map: this.getBarkTexture() }),
+      count
+    );
+    const crownInst = new THREE.InstancedMesh(
+      crownGeo,
+      new THREE.MeshStandardMaterial({ map: this.getLeafTexture(), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.95 }),
+      count
+    );
+    const dummy = new THREE.Object3D();
+    const col = new THREE.Color();
+    let placed = 0;
+    for (let i = 0; i < count * 6 && placed < count; i++) {
+      const x = Math.random() * WORLD.width;
+      const z = Math.random() * WORLD.height;
+      if (distance(x, z, WORLD.sanctum.x, WORLD.sanctum.y) < WORLD.sanctum.r + 150) continue;
+      if (isBlocked(x, z, 42)) continue;
+      const zone = zoneAt(x, z);
+      // per-biome density: the grove is thick forest, the ruins stay open
+      const keep = zone.id === 'emerald_grove' ? 1
+        : zone.id === 'moonfen_marsh' ? 0.72
+        : zone.id === 'sunken_hollow' ? 0.5 : 0.22;
+      if (Math.random() > keep) continue;
+      const s = 0.65 + Math.random() * 0.85;
+      dummy.position.set(x, 0, z);
+      dummy.rotation.y = Math.random() * Math.PI * 2;
+      dummy.scale.set(s, s * (0.85 + Math.random() * 0.4), s);
+      dummy.updateMatrix();
+      trunkInst.setMatrixAt(placed, dummy.matrix);
+      crownInst.setMatrixAt(placed, dummy.matrix);
+      col.set(zone.accent).offsetHSL(0, -0.06, (Math.random() - 0.5) * 0.12);
+      crownInst.setColorAt(placed, col);
+      placed++;
+    }
+    trunkInst.count = placed;
+    crownInst.count = placed;
+    trunkInst.instanceMatrix.needsUpdate = true;
+    crownInst.instanceMatrix.needsUpdate = true;
+    if (crownInst.instanceColor) crownInst.instanceColor.needsUpdate = true;
+    trunkInst.castShadow = this.quality === 'high';
+    this.scene.add(trunkInst, crownInst);
   }
 
   private makeGroundTexture(zoneId: string): THREE.CanvasTexture | null {
@@ -352,19 +409,41 @@ export class Game3D {
       ctx.fillRect(Math.random() * 256, Math.random() * 256, s, s);
     }
 
-    const cell = 44;
-    for (let gy = -cell; gy <= 256; gy += cell) {
-      const off = ((gy / cell) % 2) ? cell / 2 : 0;
-      for (let gx = -cell; gx <= 256; gx += cell) {
-        const x = gx + off + Math.random() * 8;
-        const y = gy + Math.random() * 8;
-        const w = cell + (Math.random() - 0.5) * 12;
-        const h = cell * (0.72 + Math.random() * 0.32);
-        ctx.fillStyle = `rgba(255,235,180,${0.035 + Math.random() * 0.04})`;
-        ctx.fillRect(x + 3, y + 3, w - 7, h - 7);
-        ctx.strokeStyle = `rgba(12,9,8,${0.26 + Math.random() * 0.16})`;
-        ctx.lineWidth = 1.3 + Math.random() * 1.2;
-        ctx.strokeRect(x, y, w, h);
+    if (zoneId === 'obsidian_ruins') {
+      // only the ruins have worked stone underfoot
+      const cell = 44;
+      for (let gy = -cell; gy <= 256; gy += cell) {
+        const off = ((gy / cell) % 2) ? cell / 2 : 0;
+        for (let gx = -cell; gx <= 256; gx += cell) {
+          const x = gx + off + Math.random() * 8;
+          const y = gy + Math.random() * 8;
+          const w = cell + (Math.random() - 0.5) * 12;
+          const h = cell * (0.72 + Math.random() * 0.32);
+          ctx.fillStyle = `rgba(255,235,180,${0.035 + Math.random() * 0.04})`;
+          ctx.fillRect(x + 3, y + 3, w - 7, h - 7);
+          ctx.strokeStyle = `rgba(12,9,8,${0.26 + Math.random() * 0.16})`;
+          ctx.lineWidth = 1.3 + Math.random() * 1.2;
+          ctx.strokeRect(x, y, w, h);
+        }
+      }
+    } else {
+      // organic forest floor: grass blades, leaf litter, bare-earth patches
+      for (let i = 0; i < 420; i++) {
+        const x = Math.random() * 256, y = Math.random() * 256;
+        const len = 3 + Math.random() * 7;
+        const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.1;
+        ctx.strokeStyle = `${palette.moss}${Math.random() > 0.5 ? '55' : '33'}`;
+        ctx.lineWidth = 0.8 + Math.random() * 0.8;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len);
+        ctx.stroke();
+      }
+      for (let i = 0; i < 40; i++) { // leaf litter
+        ctx.fillStyle = `rgba(120,90,40,${0.12 + Math.random() * 0.14})`;
+        ctx.beginPath();
+        ctx.ellipse(Math.random() * 256, Math.random() * 256, 1.6 + Math.random() * 2.6, 0.9 + Math.random() * 1.4, Math.random() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
@@ -485,6 +564,8 @@ export class Game3D {
   // Neutral-luminance detail textures: the material's color supplies the hue.
   private texBark: THREE.CanvasTexture | null = null;
   private texStone: THREE.CanvasTexture | null = null;
+  private texLeaf: THREE.CanvasTexture | null = null;
+  private texGrass: THREE.CanvasTexture | null = null;
 
   private getBarkTexture(): THREE.CanvasTexture {
     if (this.texBark) return this.texBark;
@@ -534,6 +615,63 @@ export class Game3D {
     return this.texStone;
   }
 
+  /**
+   * Alpha-cutout foliage card: dense cloud of overlapping leaf shapes with
+   * ragged edges. Near-neutral luminance so the material color supplies the
+   * biome hue. This is how real-time games build convincing tree crowns.
+   */
+  private getLeafTexture(): THREE.CanvasTexture {
+    if (this.texLeaf) return this.texLeaf;
+    const S = 256;
+    const c = document.createElement('canvas'); c.width = c.height = S;
+    const ctx = c.getContext('2d')!;
+    ctx.clearRect(0, 0, S, S);
+    // leaf clusters, denser toward the center so card edges stay ragged
+    for (let i = 0; i < 1500; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const rad = Math.pow(Math.random(), 0.62) * S * 0.46;
+      const x = S / 2 + Math.cos(ang) * rad;
+      const y = S / 2 + Math.sin(ang) * rad;
+      const v = 120 + Math.floor(Math.random() * 120);
+      ctx.fillStyle = `rgba(${Math.round(v * 0.72)},${v},${Math.round(v * 0.6)},${0.75 + Math.random() * 0.25})`;
+      const w = 3 + Math.random() * 7;
+      const h = w * (0.45 + Math.random() * 0.4);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.random() * Math.PI);
+      ctx.beginPath(); ctx.ellipse(0, 0, w, h, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+    this.texLeaf = new THREE.CanvasTexture(c);
+    this.texLeaf.colorSpace = THREE.SRGBColorSpace;
+    this.texLeaf.anisotropy = this.quality === 'high' ? 4 : 1;
+    return this.texLeaf;
+  }
+
+  /** Alpha-cutout grass tuft card (several curved blades). */
+  private getGrassTexture(): THREE.CanvasTexture {
+    if (this.texGrass) return this.texGrass;
+    const W = 128, H = 128;
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const ctx = c.getContext('2d')!;
+    ctx.clearRect(0, 0, W, H);
+    for (let i = 0; i < 26; i++) {
+      const x0 = 14 + Math.random() * (W - 28);
+      const lean = (Math.random() - 0.5) * 36;
+      const v = 130 + Math.floor(Math.random() * 110);
+      ctx.strokeStyle = `rgba(${Math.round(v * 0.66)},${v},${Math.round(v * 0.52)},${0.85 + Math.random() * 0.15})`;
+      ctx.lineWidth = 2.4 + Math.random() * 2.6;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x0, H);
+      ctx.quadraticCurveTo(x0 + lean * 0.3, H * 0.5, x0 + lean, H * (0.06 + Math.random() * 0.3));
+      ctx.stroke();
+    }
+    this.texGrass = new THREE.CanvasTexture(c);
+    this.texGrass.colorSpace = THREE.SRGBColorSpace;
+    return this.texGrass;
+  }
+
   private makeTree(x: number, y: number, radius: number, accent: number, hi: boolean): THREE.Group {
     // Human scale + organic silhouettes: bent smooth trunks with bark relief,
     // canopies built from noise-displaced ellipsoids (deciduous) or smooth
@@ -549,33 +687,32 @@ export class Game3D {
     trunk.rotation.z = (Math.random() - 0.5) * 0.09;
     trunk.castShadow = hi; g.add(trunk);
 
+    // Crown of alpha-cutout foliage cards: reads as a volumetric leafy canopy
+    // from every angle (including first person), not as geometric solids.
     const canopy = new THREE.Group();
-    const tint = new THREE.Color(accent).offsetHSL(0, -0.12, (Math.random() - 0.5) * 0.1);
-    const leafMat = new THREE.MeshStandardMaterial({ color: tint.offsetHSL(0, 0.02, 0.08), emissive: new THREE.Color(accent).multiplyScalar(0.08), emissiveIntensity: 0.1, roughness: 0.96 });
-    if (Math.random() < 0.45) {
-      // deciduous: a cluster of irregular leaf masses
-      for (let i = 0; i < 4; i++) {
-        const s = radius * (0.55 + Math.random() * 0.5);
-        const blob = new THREE.Mesh(jitterGeometry(new THREE.SphereGeometry(s, 12, 9), s * 0.16), leafMat);
-        const a = Math.random() * Math.PI * 2;
-        blob.position.set(Math.cos(a) * radius * 0.4, radius * (2.6 + Math.random() * 1.1), Math.sin(a) * radius * 0.4);
-        blob.scale.y = 0.78 + Math.random() * 0.3;
-        blob.castShadow = hi;
-        canopy.add(blob);
-      }
-    } else {
-      // fir: smooth, slightly irregular cones
-      for (let i = 0; i < 3; i++) {
-        const f = 1 - i / 3;
-        const cone = new THREE.Mesh(
-          jitterGeometry(new THREE.ConeGeometry(radius * (0.75 + f * 0.6), radius * 1.7, 14, 3), radius * 0.06),
-          leafMat
-        );
-        cone.position.y = radius * (2.5 + i * 0.95);
-        cone.rotation.y = Math.random() * Math.PI;
-        cone.castShadow = hi;
-        canopy.add(cone);
-      }
+    const tint = new THREE.Color(accent).offsetHSL(0, -0.06, (Math.random() - 0.5) * 0.08);
+    const leafMat = new THREE.MeshStandardMaterial({
+      color: tint,
+      map: this.getLeafTexture(),
+      alphaTest: 0.45,
+      side: THREE.DoubleSide,
+      roughness: 0.95,
+      emissive: new THREE.Color(accent).multiplyScalar(0.05),
+      emissiveIntensity: 0.1,
+    });
+    const cardGeo = new THREE.PlaneGeometry(radius * 2.5, radius * 2.0);
+    const cards = hi ? 9 : 6;
+    for (let i = 0; i < cards; i++) {
+      const card = new THREE.Mesh(cardGeo, leafMat);
+      const a = (i / cards) * Math.PI * 2 + Math.random() * 0.8;
+      card.position.set(
+        Math.cos(a) * radius * (0.25 + Math.random() * 0.45),
+        radius * (2.55 + Math.random() * 1.25),
+        Math.sin(a) * radius * (0.25 + Math.random() * 0.45)
+      );
+      card.rotation.set((Math.random() - 0.5) * 0.9, Math.random() * Math.PI, (Math.random() - 0.5) * 0.5);
+      // cards don't cast shadows (depth pass ignores alphaTest → ugly slabs)
+      canopy.add(card);
     }
     g.add(canopy); g.position.set(x, 0, y);
     this.foliage.push({ mesh: canopy, sway: 0.04 + Math.random() * 0.03, phase: Math.random() * Math.PI * 2 });
@@ -648,9 +785,13 @@ export class Game3D {
   }
 
   private scatterGrass() {
-    const blade = new THREE.ConeGeometry(3.4, 16, 4); blade.translate(0, 8, 0);
-    const count = 2400;
-    const inst = new THREE.InstancedMesh(blade, new THREE.MeshStandardMaterial({ roughness: 1 }), count);
+    // grass tuft cards (alpha cutout) instead of geometric spikes
+    const blade = new THREE.PlaneGeometry(16, 15);
+    blade.translate(0, 7.5, 0);
+    const count = this.quality === 'high' ? 5200 : 1400;
+    const inst = new THREE.InstancedMesh(blade, new THREE.MeshStandardMaterial({
+      map: this.getGrassTexture(), alphaTest: 0.4, side: THREE.DoubleSide, roughness: 1,
+    }), count);
     const dummy = new THREE.Object3D(); const col = new THREE.Color();
     let placed = 0;
     for (let i = 0; i < count * 4 && placed < count; i++) {
@@ -734,125 +875,6 @@ export class Game3D {
   }
 
   // ---- meshes ---------------------------------------------------------------
-
-  private createPlayerMesh(classKey: string, isLocal: boolean): THREE.Group {
-    const color = CLASS_COLORS[classKey] ?? 0xffffff;
-    const g = new THREE.Group();
-    const main = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(color).offsetHSL(0, 0.04, 0.08),
-      emissive: new THREE.Color(color).multiplyScalar(0.2),
-      emissiveIntensity: isLocal ? 0.34 : 0.2,
-      roughness: 0.62,
-      metalness: 0.04,
-      flatShading: true,
-    });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x302418, roughness: 0.82 });
-    const bone = new THREE.MeshStandardMaterial({ color: 0xf0dca4, emissive: 0x3b2c12, emissiveIntensity: 0.12, roughness: 0.66 });
-    const metal = new THREE.MeshStandardMaterial({ color: 0xd9e8ef, roughness: 0.36, metalness: 0.45 });
-    const accent = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.45, roughness: 0.3 });
-
-    const rig: Rig = { phase: Math.random() * Math.PI * 2, stride: 0, attack: 0 };
-
-    // Legs — hip pivot groups so they swing while walking
-    const mkLeg = (sx: number) => {
-      const hip = new THREE.Group(); hip.position.set(sx, 20, 0);
-      const leg = new THREE.Mesh(new THREE.CapsuleGeometry(4.6, 14, 3, 6), dark);
-      leg.position.y = -9; leg.castShadow = true;
-      const foot = new THREE.Mesh(new THREE.BoxGeometry(7, 4, 12), dark);
-      foot.position.set(0, -18, 3);
-      hip.add(leg, foot); g.add(hip); return hip;
-    };
-    rig.legL = mkLeg(-6); rig.legR = mkLeg(6);
-
-    // Torso
-    const torso = new THREE.Group(); torso.position.y = 20;
-    const belly = new THREE.Mesh(new THREE.CapsuleGeometry(10, 16, 4, 10), main);
-    belly.position.y = 11; belly.castShadow = true;
-    const chest = new THREE.Mesh(new THREE.BoxGeometry(21, 16, 13), dark);
-    chest.position.y = 16; chest.castShadow = true;
-    torso.add(belly, chest); g.add(torso); rig.torso = torso;
-
-    // Head (animal-like, with snout)
-    const head = new THREE.Group(); head.position.set(0, 46, 0);
-    const skull = new THREE.Mesh(new THREE.SphereGeometry(8.5, 16, 12), main); skull.castShadow = true;
-    const muzzle = new THREE.Mesh(new THREE.ConeGeometry(4.2, 10, 8), bone);
-    muzzle.rotation.x = Math.PI / 2; muzzle.position.set(0, -3, 9);
-    const eyeL = new THREE.Mesh(new THREE.SphereGeometry(1.7, 8, 6), accent);
-    const eyeR = eyeL.clone();
-    eyeL.position.set(-3.2, 1.5, 7.2); eyeR.position.set(3.2, 1.5, 7.2);
-    head.add(skull, muzzle, eyeL, eyeR); g.add(head);
-
-    // Arms — shoulder pivot groups (right arm wields / attacks)
-    const mkArm = (sx: number) => {
-      const sh = new THREE.Group(); sh.position.set(sx, 36, 0);
-      const arm = new THREE.Mesh(new THREE.CapsuleGeometry(3.7, 13, 3, 6), main);
-      arm.position.y = -8; arm.castShadow = true;
-      sh.add(arm); g.add(sh); return sh;
-    };
-    const armL = mkArm(-12), armR = mkArm(12);
-    rig.armL = armL; rig.armR = armR;
-
-    if (classKey === 'stag_druid') {
-      for (const side of [-1, 1]) {
-        const antler = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.5, 22, 6), bone);
-        antler.position.set(side * 6, 12, -1); antler.rotation.z = side * -0.45;
-        const tine = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.1, 13, 5), bone);
-        tine.position.set(side * 10, 19, -1); tine.rotation.z = side * -0.9;
-        head.add(antler, tine);
-      }
-      const staff = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.4, 58, 7), bone);
-      staff.position.set(2, 6, 4); staff.castShadow = true;
-      const gem = new THREE.Mesh(new THREE.IcosahedronGeometry(5.5, 0), accent);
-      gem.position.set(2, 34, 4);
-      armR.add(staff, gem);
-    } else if (classKey === 'raven_witch') {
-      const beak = new THREE.Mesh(new THREE.ConeGeometry(4.5, 14, 4), new THREE.MeshStandardMaterial({ color: 0x141017, roughness: 0.7 }));
-      beak.rotation.x = Math.PI / 2; beak.position.set(0, -2, 12); head.add(beak);
-      for (const side of [-1, 1]) {
-        const wing = new THREE.Mesh(new THREE.ConeGeometry(7, 34, 3), dark);
-        wing.position.set(side * 15, 10, -4); wing.rotation.set(0.65, 0.2 * side, side * 0.8);
-        wing.castShadow = true; torso.add(wing);
-      }
-      const orb = new THREE.Mesh(new THREE.SphereGeometry(5, 14, 10), accent);
-      orb.position.set(0, -12, 9);
-      const light = new THREE.PointLight(color, 0.6, 130); light.position.copy(orb.position);
-      armL.add(orb, light);
-    } else if (classKey === 'wolf_guardian') {
-      for (const side of [-1, 1]) {
-        const ear = new THREE.Mesh(new THREE.ConeGeometry(4, 13, 4), main);
-        ear.position.set(side * 6.5, 8, 0); ear.rotation.z = side * -0.35; head.add(ear);
-      }
-      const shield = new THREE.Mesh(new THREE.CylinderGeometry(9, 9, 3, 6), metal);
-      shield.position.set(0, -8, 9); shield.rotation.set(Math.PI / 2, 0, 0.12);
-      const crest = new THREE.Mesh(new THREE.OctahedronGeometry(4, 0), accent);
-      crest.position.set(0, -8, 11);
-      armL.add(shield, crest);
-      const sword = new THREE.Mesh(new THREE.BoxGeometry(3, 38, 4), metal);
-      sword.position.set(0, -6, 7); sword.castShadow = true; armR.add(sword);
-    } else if (classKey === 'fox_trickster') {
-      for (const side of [-1, 1]) {
-        const ear = new THREE.Mesh(new THREE.ConeGeometry(4.8, 15, 4), main);
-        ear.position.set(side * 6.7, 9, 0); ear.rotation.z = side * -0.45; head.add(ear);
-      }
-      const daggerL = new THREE.Mesh(new THREE.ConeGeometry(2.5, 21, 4), metal);
-      daggerL.position.set(0, -12, 8); daggerL.rotation.x = Math.PI / 2; armL.add(daggerL);
-      const daggerR = daggerL.clone(); armR.add(daggerR);
-      const tail = new THREE.Mesh(new THREE.CapsuleGeometry(5.5, 30, 4, 10), main);
-      tail.position.set(0, 4, -15); tail.rotation.x = -0.8; tail.castShadow = true;
-      const tip = new THREE.Mesh(new THREE.SphereGeometry(5.2, 10, 8), bone);
-      tip.position.set(0, -10, -27);
-      torso.add(tail, tip);
-    }
-
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(15, 19, 24),
-      new THREE.MeshBasicMaterial({ color: isLocal ? 0xffe082 : color, transparent: true, opacity: 0.85, side: THREE.DoubleSide })
-    );
-    ring.rotation.x = -Math.PI / 2; ring.position.y = 1; g.add(ring);
-
-    g.userData.rig = rig;
-    return g;
-  }
 
   private createEnemyMesh(type: string): THREE.Group {
     const color = ENEMY_COLORS[type] ?? 0xff5252;
@@ -1135,7 +1157,7 @@ export class Game3D {
     const addPlayer = (p: RealmRoomState['players'] extends Map<string, infer P> ? P : never, id: string) => {
       if (this.players.has(id)) return;
       const isLocal = id === this.localId;
-      const group = this.createPlayerMesh(p.classKey, isLocal);
+      const group = buildHeroMesh(p.classKey, isLocal);
       group.position.set(p.x, 0, p.y);
       if (isLocal) {
         // Hero torch: a warm pool of light that travels with you (Diablo mood).
@@ -1750,9 +1772,10 @@ export class Game3D {
       if (this.keys['KeyD'] || this.keys['ArrowRight']) strafe += 1;
       if (this.keys['KeyA'] || this.keys['ArrowLeft']) strafe -= 1;
       fwd += -this.joyDy; strafe += this.joyDx;
+      // right = forward × up = (-cos(yaw), sin(yaw)) on the ground plane
       const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
-      dx = sy * fwd + cy * strafe;
-      dy = cy * fwd - sy * strafe;
+      dx = sy * fwd - cy * strafe;
+      dy = cy * fwd + sy * strafe;
     } else {
       if (this.keys['KeyA'] || this.keys['ArrowLeft']) dx -= 1;
       if (this.keys['KeyD'] || this.keys['ArrowRight']) dx += 1;
