@@ -15,7 +15,7 @@ import {
 import { AudioSystem } from './AudioSystem.js';
 import { buildHeroMesh, CLASS_COLORS } from './heroMesh.js';
 import type { Rig } from './heroMesh.js';
-import { HERO_MODELS, ENEMY_MODELS, ENEMY_MODEL_HEIGHTS, instantiateModel, preloadModel } from './models.js';
+import { HERO_MODELS, ENEMY_MODELS, ENEMY_MODEL_HEIGHTS, UNIT_MODEL, RUIN_MODELS, instantiateModel, instantiateStatic, preloadModel } from './models.js';
 import type { RiggedActions } from './models.js';
 import type {
   PlayerClass, AbilityKey, PlayerInputPayload, ResourceType, StructureType,
@@ -221,9 +221,11 @@ export class Game3D {
     document.addEventListener('pointerlockchange', this.onLockChange);
     document.addEventListener('mousemove', this.onMouseLook);
 
-    // Warm the model cache: this hero's class plus the common foes.
+    // Warm the model cache: this hero's class, the foes, soldiers and ruins.
     void preloadModel(HERO_MODELS[this.session.classKey] ?? HERO_MODELS.stag_druid);
     for (const url of Object.values(ENEMY_MODELS)) void preloadModel(url);
+    void preloadModel(UNIT_MODEL);
+    for (const url of RUIN_MODELS) void preloadModel(url);
 
     this.loop();
   }
@@ -317,7 +319,7 @@ export class Game3D {
       const zone = zoneAt(o.x, o.y);
       if (o.kind === 'tree') this.scene.add(this.makeTree(o.x, o.y, o.radius, zone.accent, hi));
       else if (o.kind === 'rock') this.scene.add(this.makeRock(o.x, o.y, o.radius, hi));
-      else if (o.kind === 'ruin') this.scene.add(this.makeRuin(o.x, o.y, o.radius, hi));
+      else if (o.kind === 'ruin') this.placeRuin(o.x, o.y, o.radius, hi);
       else this.scene.add(this.makeWater(o.x, o.y, o.radius));
     }
 
@@ -757,6 +759,24 @@ export class Game3D {
     }
     g.position.set(x, 0, y);
     return g;
+  }
+
+  /** Place a ruin: procedural fallback shown instantly, swapped for a textured
+   *  GLB column/rubble prop when it loads. */
+  private placeRuin(x: number, y: number, radius: number, hi: boolean) {
+    const fallback = this.makeRuin(x, y, radius, hi);
+    this.scene.add(fallback);
+    const useRubble = Math.random() < 0.25;
+    const url = useRubble ? RUIN_MODELS[4] : RUIN_MODELS[Math.floor(Math.random() * 4)];
+    const targetH = useRubble ? radius * 1.5 : radius * 3.2;
+    void instantiateStatic(url, targetH).then((g) => {
+      if (this.disposed || !g) return;
+      this.scene.remove(fallback); disposeGroup(fallback);
+      g.position.set(x, 0, y);
+      g.rotation.y = Math.random() * Math.PI * 2;
+      g.userData.foliage = false;
+      this.scene.add(g);
+    });
   }
 
   private makeRuin(x: number, y: number, radius: number, hi: boolean): THREE.Group {
@@ -1305,21 +1325,34 @@ export class Game3D {
 
       const addUnit = (u: RealmRoomState['units'] extends Map<string, infer U> ? U : never, id: string) => {
         if (this.units.has(id)) return;
-        const group = this.createUnitMesh(u.ownerId === this.localId);
+        const ownerIsLocal = u.ownerId === this.localId;
+        const group = new THREE.Group();
         group.position.set(u.x, 0, u.y);
         group.visible = u.isAlive;
+        // banner ring tinting friend/owner
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(11, 14, 20),
+          new THREE.MeshBasicMaterial({ color: ownerIsLocal ? 0xf0c96f : 0x9fc5eb, transparent: true, opacity: 0.55, side: THREE.DoubleSide })
+        );
+        ring.rotation.x = -Math.PI / 2; ring.position.y = 1; group.add(ring);
         const label = this.makeLabel();
         label.sprite.position.set(0, 54, 0);
         group.add(label.sprite);
         this.scene.add(group);
-        this.units.set(id, {
+        const entity: Entity = {
           group,
           target: new THREE.Vector3(u.x, 0, u.y),
           faceTarget: 0,
           kind: 'unit',
-          name: 'Guardia',
+          name: 'Soldado',
           label,
           lastPos: new THREE.Vector3(u.x, 0, u.y),
+        };
+        this.units.set(id, entity);
+        void instantiateModel(UNIT_MODEL, 40).then((ri) => {
+          if (this.disposed || this.units.get(id) !== entity) return;
+          if (ri) { group.add(ri.group); entity.mixer = ri.mixer; entity.actions = ri.actions; }
+          else group.add(this.createUnitMesh(ownerIsLocal));
         });
       };
       const removeUnit = (_u: unknown, id: string) => {
@@ -2217,7 +2250,13 @@ export class Game3D {
       const dz = e.group.position.z - old.z;
       if (Math.hypot(dx, dz) > 0.02) e.faceTarget = Math.atan2(dx, dz);
       e.group.rotation.y = lerpAngle(e.group.rotation.y, e.faceTarget, 1 - Math.pow(0.001, dt));
-      e.group.position.y = Math.sin(time * 7 + e.group.position.x * 0.02) * 1.2;
+      if (e.mixer) {
+        e.group.position.y = 0;
+        const sp = Math.hypot(dx, dz) / Math.max(dt, 0.001);
+        this.driveMixer(e, sp > 6, sp, dt);
+      } else {
+        e.group.position.y = Math.sin(time * 7 + e.group.position.x * 0.02) * 1.2;
+      }
     });
     this.sanctuaries.forEach((s) => { s.pillar.rotation.y += dt; const k = 1 + Math.sin(this.clock.elapsedTime * 2) * 0.06; s.pillar.scale.set(k, 1, k); });
     this.resourceMeshes.forEach((g) => { g.rotation.y += dt * 0.8; });

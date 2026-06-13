@@ -26,6 +26,18 @@ export const ENEMY_MODEL_HEIGHTS: Record<string, number> = {
   rune_imp: 48,
 };
 
+/** Friendly soldiers trained at barracks reuse the Knight model. */
+export const UNIT_MODEL = '/models/Knight.glb';
+
+/** Static (non-animated) ruin props — textured GLB columns/rubble. */
+export const RUIN_MODELS = [
+  '/models/ruin_pillar.glb',
+  '/models/ruin_pillar_decorated.glb',
+  '/models/ruin_column.glb',
+  '/models/ruin_barrier_column.glb',
+  '/models/ruin_rubble_half.glb',
+];
+
 interface LoadedModel {
   scene: THREE.Group;
   animations: THREE.AnimationClip[];
@@ -53,6 +65,19 @@ export function preloadModel(url: string): Promise<LoadedModel | null> {
     cache.set(url, p);
   }
   return p;
+}
+
+/**
+ * Clone a cached model as a static prop (no skeleton/mixer), scaled to a
+ * target height. Cheap regular clone — props share the source geometry.
+ */
+export async function instantiateStatic(url: string, targetHeight: number): Promise<THREE.Group | null> {
+  const model = await preloadModel(url);
+  if (!model) return null;
+  const inst = model.scene.clone(true);
+  inst.scale.setScalar(targetHeight / model.height);
+  inst.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+  return inst;
 }
 
 export interface RiggedActions {
